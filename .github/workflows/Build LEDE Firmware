@@ -3,55 +3,53 @@ name: Build LEDE Firmware
 on:
   workflow_dispatch:
     inputs:
+      use_custom_config:
+        description: '是否启用自定义配置（IP/主题/插件追加）'
+        required: false
+        type: choice
+        options: ['yes', 'no']
+        default: 'no'
       custom_lan_ip:
-        description: '自定义后台 IP（默认 10.0.0.1，支持如 192.168.5.1）'
+        description: '自定义后台 IP（仅在启用自定义配置时有效，默认 10.0.0.1）'
         required: false
         default: '10.0.0.1'
         type: string
-
       enable_passwall:
         description: '包含 Passwall（代理/翻墙工具）'
         required: false
         type: choice
         options: ['yes', 'no']
         default: 'no'
-
       enable_mosdns:
         description: '包含 MosDNS（智能 DNS 分流）'
         required: false
         type: choice
         options: ['yes', 'no']
         default: 'no'
-
       enable_qmodem:
         description: '包含 Qmodem（如果 feed 已加）'
         required: false
         type: choice
         options: ['yes', 'no']
         default: 'no'
-
       enable_zerotier:
         description: '包含 ZeroTier（虚拟局域网）'
         required: false
         type: choice
         options: ['yes', 'no']
         default: 'no'
-
       enable_adguardhome:
         description: '包含 AdGuard Home（去广告 + DNS）'
         required: false
         type: choice
         options: ['yes', 'no']
         default: 'no'
-
       enable_openclash:
         description: '包含 OpenClash（Clash 代理客户端）'
         required: false
         type: choice
         options: ['yes', 'no']
         default: 'no'
-
-      # ... 其他插件可继续添加（已省略部分以节省空间，可自行扩展）
 
 jobs:
   build:
@@ -110,8 +108,8 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Replace luci-app-passwall (if enabled)
-        if: ${{ inputs.enable_passwall == 'yes' }}
+      - name: Replace luci-app-passwall (if enabled and custom config)
+        if: ${{ inputs.enable_passwall == 'yes' && inputs.use_custom_config == 'yes' }}
         working-directory: ./lede/feeds/luci/applications
         run: |
           rm -rf luci-app-passwall || true
@@ -123,29 +121,26 @@ jobs:
           mv luci-app-passwall ../../
           cd .. && rm -rf temp
 
-      - name: Apply custom patches (IP & Theme)
+      - name: Apply custom IP, theme and patches
+        if: ${{ inputs.use_custom_config == 'yes' }}
         working-directory: ./lede
         run: |
-          # 自定义后台 IP（从输入获取，默认 10.0.0.1）
           LAN_IP="${{ inputs.custom_lan_ip }}"
           echo "设置后台 IP 为: $LAN_IP"
           
-          # 计算前缀（假设是 A/B/C 类地址，如 10.0.0.1 → 10.0.0.）
-          PREFIX="${LAN_IP%.*}."           # e.g. 10.0.0.
-          PREFIX_SHORT="${LAN_IP%.*.*}."   # e.g. 10.0.
+          PREFIX="${LAN_IP%.*}."
+          PREFIX_SHORT="${LAN_IP%.*.*}."
           
-          # 修改 config_generate（coolsnowwolf/lede 使用这个文件生成默认 network config）
+          # 修改默认 LAN IP 配置
           sed -i "s/192.168.1.1/$LAN_IP/g" package/base-files/files/bin/config_generate
-          sed -i "s/192.168.1\./$PREFIX/g" package/base-files/files/bin/config_generate
+          sed -i "s/192.168.1\./$PREFIX/g"   package/base-files/files/bin/config_generate
           sed -i "s/192.168\./$PREFIX_SHORT/g" package/base-files/files/bin/config_generate
           
-          # 额外替换（以防其他地方硬编码）
-          find package/ -type f -name "*.sh" -o -name "*.config" -exec \
-            sed -i "s/192.168.1.1/$LAN_IP/g" {} \;
-          find package/ -type f -name "*.sh" -o -name "*.config" -exec \
-            sed -i "s/192.168.1\./$PREFIX/g" {} \;
+          # 可选：全局搜索替换（谨慎，建议只在必要时开启）
+          # find package/ -type f -name "*.sh" -o -name "*.config" -exec sed -i "s/192.168.1.1/$LAN_IP/g" {} \;
+          # find package/ -type f -name "*.sh" -o -name "*.config" -exec sed -i "s/192.168.1\./$PREFIX/g" {} \;
           
-          # 设置主题为 argon
+          # 强制使用 argon 主题
           find feeds/luci/collections/ -type f -name Makefile -exec \
             sed -i -E 's/(luci-theme-)[a-zA-Z0-9_-]+/\1argon/g' {} \;
 
@@ -166,10 +161,12 @@ jobs:
       - name: Prepare .config
         working-directory: ./lede
         run: |
+          # 优先使用仓库中预置的 X86/.config
           if [ -f ../X86/.config ]; then
             cp ../X86/.config ./
-            echo "使用仓库 X86/.config 作为基础"
+            echo "使用仓库中的 X86/.config 作为基础配置"
           else
+            # 极少情况下的保底配置
             cat > .config << 'EOF'
           CONFIG_TARGET_x86=y
           CONFIG_TARGET_x86_64=y
@@ -185,26 +182,26 @@ jobs:
           CONFIG_CLEAN_IPKG=y
           CONFIG_BUILDBOT=y
           EOF
+            echo "未找到 X86/.config，使用基础默认配置"
           fi
 
-          # 动态追加插件
-          {
-            echo ""
-            echo "# 动态插件 (${{ github.run_number }})"
+          # 只有在启用自定义配置时才追加插件
+          if [ "${{ inputs.use_custom_config }}" = "yes" ]; then
+            echo "" >> .config
+            echo "# 自定义插件 - run #${{ github.run_number }}" >> .config
             
-            [ "${{ inputs.enable_passwall }}" = "yes" ] && echo "CONFIG_PACKAGE_luci-app-passwall=y"
-            [ "${{ inputs.enable_mosdns }}" = "yes" ] && echo "CONFIG_PACKAGE_luci-app-mosdns=y"
-            [ "${{ inputs.enable_qmodem }}" = "yes" ] && echo "CONFIG_PACKAGE_luci-app-qmodem=y"
-            [ "${{ inputs.enable_zerotier }}" = "yes" ] && { echo "CONFIG_PACKAGE_luci-app-zerotier=y"; echo "CONFIG_PACKAGE_zerotier=y"; }
-            [ "${{ inputs.enable_adguardhome }}" = "yes" ] && echo "CONFIG_PACKAGE_luci-app-adguardhome=y"
-            [ "${{ inputs.enable_openclash }}" = "yes" ] && echo "CONFIG_PACKAGE_luci-app-openclash=y"
-            # ... 其他插件类似
-          } >> .config
+            [ "${{ inputs.enable_passwall }}"    = "yes" ] && echo "CONFIG_PACKAGE_luci-app-passwall=y"    >> .config
+            [ "${{ inputs.enable_mosdns }}"      = "yes" ] && echo "CONFIG_PACKAGE_luci-app-mosdns=y"      >> .config
+            [ "${{ inputs.enable_qmodem }}"      = "yes" ] && echo "CONFIG_PACKAGE_luci-app-qmodem=y"      >> .config
+            [ "${{ inputs.enable_zerotier }}"    = "yes" ] && { echo "CONFIG_PACKAGE_luci-app-zerotier=y" >> .config; echo "CONFIG_PACKAGE_zerotier=y" >> .config; }
+            [ "${{ inputs.enable_adguardhome }}" = "yes" ] && echo "CONFIG_PACKAGE_luci-app-adguardhome=y" >> .config
+            [ "${{ inputs.enable_openclash }}"   = "yes" ] && echo "CONFIG_PACKAGE_luci-app-openclash=y"   >> .config
+          fi
 
           make defconfig
-          
-          echo "最终 .config 插件部分："
-          grep -E "passwall|mosdns|qmodem|zerotier|adguard|openclash" .config || echo "无额外插件"
+
+          echo "最终 .config 中插件相关配置："
+          grep -E "passwall|mosdns|qmodem|zerotier|adguard|openclash|luci-theme" .config || echo "（无匹配项）"
 
       - name: Download dependencies
         working-directory: ./lede
@@ -220,6 +217,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Thatdream-${{ github.run_number }}-${{ steps.timestamp.outputs.time }}
+          name: LEDE-${{ github.run_number }}-${{ steps.timestamp.outputs.time }}
           path: lede/bin/targets/**/*
           retention-days: 7
