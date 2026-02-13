@@ -18,7 +18,7 @@ env:
 
   # 固定读取本仓库的 config 文件（参考你给的 Build_XG_040G_MD 写法）
   # 你必须保证这个文件真实存在！
-  CONFIG_FILE: 'X86/.config'
+  CONFIG_FILE: 'X86/x86.config'
 
   TZ: Asia/Shanghai
 
