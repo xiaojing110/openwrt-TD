@@ -26,53 +26,63 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ────────────────────────────────────────────────
-      # 先检查本地 .config 文件是否存在（根目录 或 X86 目录）
-      # ────────────────────────────────────────────────
-      - name: 检查仓库中的 .config 文件
+            - name: 检查并复制仓库中的 .config 文件
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "开始检查仓库中是否存在 .config 文件"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "强制列出仓库根目录所有文件（包括隐藏文件）"
+          ls -la .. | grep -i config || echo "（没有匹配 config 的文件）"
 
-          ROOT_CONFIG="../.config"
-          X86_CONFIG="../X86/.config"
-
-          ROOT_EXISTS=false
-          X86_EXISTS=false
-
-          if [ -f "$ROOT_CONFIG" ]; then
-            ROOT_EXISTS=true
-            echo "✓ 根目录下存在 .config 文件"
-            echo "  路径: $ROOT_CONFIG"
+          echo ""
+          echo "检查根目录 .config："
+          if [ -f "../.config" ]; then
+            echo "✓ 根目录 .config 存在"
+            ls -l "../.config"   # 显示大小、时间确认
+            mkdir -p lede
+            cp "../.config" lede/.config
+            echo "已复制根目录 .config 到 lede/.config"
           else
-            echo "根目录下未找到 .config"
-          fi
-
-          if [ -d "../X86" ] && [ -f "$X86_CONFIG" ]; then
-            X86_EXISTS=true
-            echo "✓ X86 目录下存在 .config 文件"
-            echo "  路径: $X86_CONFIG"
-          else
-            if [ ! -d "../X86" ]; then
-              echo "X86 目录不存在"
-            else
-              echo "X86 目录存在，但里面没有 .config 文件"
-            fi
+            echo "根目录 .config 不存在"
           fi
 
           echo ""
-          if $ROOT_EXISTS; then
-            echo "优先使用：根目录 .config"
-            mkdir -p lede
-            cp "$ROOT_CONFIG" lede/.config
-          elif $X86_EXISTS; then
-            echo "使用：X86/.config"
-            mkdir -p lede
-            cp "$X86_CONFIG" lede/.config
+          echo "检查 X86/.config："
+          if [ -d "../X86" ] && [ -f "../X86/.config" ]; then
+            echo "✓ X86/.config 存在"
+            ls -l "../X86/.config"
+            if [ ! -f "lede/.config" ]; then   # 如果根目录没复制，才用这个
+              mkdir -p lede
+              cp "../X86/.config" lede/.config
+              echo "已复制 X86/.config 到 lede/.config（根目录无文件）"
+            else
+              echo "根目录已有 .config，优先使用它（跳过 X86 的）"
+            fi
           else
-            echo "⚠️ 仓库中既没有根目录 .config，也没有 X86/.config"
-            echo "   将使用内置默认配置继续编译"
+            echo "X86 目录或 X86/.config 不存在"
+          fi
+
+          if [ ! -f "lede/.config" ]; then
+            echo "⚠️ 两个位置都没有找到 .config，使用内置默认配置"
+            mkdir -p lede
+            cat > lede/.config << 'EOF'
+          CONFIG_TARGET_x86=y
+          CONFIG_TARGET_x86_64=y
+          CONFIG_TARGET_x86_64_DEVICE_generic=y
+
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-theme-argon=y
+
+          CONFIG_PACKAGE_luci-app-passwall=y
+          CONFIG_PACKAGE_luci-app-mosdns=y
+
+          CONFIG_PACKAGE_firewall4=y
+          CONFIG_PACKAGE_nftables=y
+          CONFIG_PACKAGE_kmod-nft-core=y
+
+          CONFIG_CLEAN_IPKG=y
+          CONFIG_BUILDBOT=y
+          EOF
+          else
+            echo "成功准备 .config 文件（来源：仓库）"
           fi
 
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
