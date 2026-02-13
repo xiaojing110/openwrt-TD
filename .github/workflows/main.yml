@@ -1,0 +1,258 @@
+name: Build LEDE Firmware
+
+on:
+  workflow_dispatch:
+    inputs:
+      enable_passwall:
+        description: '包含 Passwall（代理/翻墙工具）'
+        required: false
+        type: choice
+        options: ['yes', 'no']
+        default: 'no'
+
+      enable_mosdns:
+        description: '包含 MosDNS（智能 DNS 分流）'
+        required: false
+        type: choice
+        options: ['yes', 'no']
+        default: 'no'
+
+      enable_qmodem:
+        description: '包含 Qmodem（拨号/猫工具，如果 feed 已加）'
+        required: false
+        type: choice
+        options: ['yes', 'no']
+        default: 'no'
+
+      enable_zerotier:
+        description: '包含 ZeroTier（虚拟局域网）'
+        required: false
+        type: choice
+        options: ['yes', 'no']
+        default: 'no'
+
+      enable_adguardhome:
+        description: '包含 AdGuard Home（去广告 + DNS）'
+        required: false
+        type: choice
+        options: ['yes', 'no']
+        default: 'no'
+
+      enable_openclash:
+        description: '包含 OpenClash（Clash 代理客户端）'
+        required: false
+        type: choice
+        options: ['yes', 'no']
+        default: 'no'
+
+      enable_serverchan:
+        description: '包含 ServerChan（微信推送）'
+        required: false
+        type: choice
+        options: ['yes', 'no']
+        default: 'no'
+
+      enable_ttnode:
+        description: '包含 TTNode（天体推送/监控）'
+        required: false
+        type: choice
+        options: ['yes', 'no']
+        default: 'no'
+
+      enable_alist:
+        description: '包含 Alist（文件列表程序）'
+        required: false
+        type: choice
+        options: ['yes', 'no']
+        default: 'no'
+
+      enable_filebrowser:
+        description: '包含 Filebrowser（文件管理器）'
+        required: false
+        type: choice
+        options: ['yes', 'no']
+        default: 'no'
+
+      enable_docker:
+        description: '包含 Docker 支持（容器）'
+        required: false
+        type: choice
+        options: ['yes', 'no']
+        default: 'no'
+
+      enable_frpc:
+        description: '包含 FRP 内网穿透（客户端）'
+        required: false
+        type: choice
+        options: ['yes', 'no']
+        default: 'no'
+
+      # 你可以继续添加更多，例如：
+      # enable_nps:
+      #   description: '包含 NPS 内网穿透'
+      #   required: false
+      #   type: choice
+      #   options: ['yes', 'no']
+      #   default: 'no'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Generate timestamp for filename
+        id: timestamp
+        run: echo "time=$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
+
+      - name: Install build dependencies
+        run: |
+          sudo apt update -y && sudo apt full-upgrade -y
+          sudo apt install -y \
+            ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
+            bzip2 ccache clang cmake cpio curl device-tree-compiler flex gawk gcc-multilib \
+            g++-multilib gettext genisoimage git gperf haveged help2man intltool \
+            libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev \
+            libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev \
+            libreadline-dev libssl-dev libtool llvm lrzsz libnsl-dev ninja-build p7zip \
+            p7zip-full patch pkgconf python3 python3-pyelftools python3-setuptools \
+            qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs \
+            upx-ucl unzip vim wget xmlto xxd zlib1g-dev
+          sudo apt clean
+
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 512
+          swap-size-mb: 2048  # 加大 swap 以支持更多插件
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+
+      - name: Clone LEDE source
+        run: |
+          git clone https://github.com/coolsnowwolf/lede.git
+          cd lede
+
+      - name: Modify feeds.conf.default
+        working-directory: ./lede
+        run: |
+          sed -i '/^src-git luci/c\src-git luci https://github.com/coolsnowwolf/luci.git;openwrt-25.12' feeds.conf.default
+          sed -i 's/^#src-git qmodem/src-git qmodem/' feeds.conf.default || true
+          echo "src-git mosdns https://github.com/sbwml/luci-app-mosdns.git" >> feeds.conf.default
+          # 如果其他插件需要额外 feed，可在这里添加
+          cat feeds.conf.default
+
+      - name: Update and install feeds
+        working-directory: ./lede
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Replace luci-app-passwall (if enabled)
+        if: ${{ inputs.enable_passwall == 'yes' }}
+        working-directory: ./lede/feeds/luci/applications
+        run: |
+          rm -rf luci-app-passwall || true
+          git clone --depth=1 https://github.com/Openwrt-Passwall/openwrt-passwall.git temp
+          cd temp
+          git sparse-checkout init --cone
+          git sparse-checkout set luci-app-passwall
+          git checkout
+          mv luci-app-passwall ../../
+          cd .. && rm -rf temp
+
+      - name: Apply custom patches
+        working-directory: ./lede
+        run: |
+          sed -i 's/192.168.1.1/10.0.0.1/g' package/base-files/files/bin/config_generate
+          sed -i 's/192.168.1./10.0.0./g'   package/base-files/files/bin/config_generate
+          sed -i 's/192.168./10.0./g'        package/base-files/files/bin/config_generate
+          
+          find feeds/luci/collections/ -type f -name Makefile -exec \
+            sed -i -E 's/(luci-theme-)[a-zA-Z0-9_-]+/\1argon/g' {} \;
+
+      - name: Cache downloads
+        uses: actions/cache@v4
+        with:
+          path: lede/dl
+          key: ${{ runner.os }}-lede-downloads-${{ hashFiles('lede/.config') }}
+          restore-keys: ${{ runner.os }}-lede-downloads-
+
+      - name: Cache toolchain
+        uses: actions/cache@v4
+        with:
+          path: lede/staging_dir
+          key: ${{ runner.os }}-lede-toolchain-${{ hashFiles('lede/.config') }}
+          restore-keys: ${{ runner.os }}-lede-toolchain-
+
+      - name: Prepare .config
+        working-directory: ./lede
+        run: |
+          if [ -f ../X86/.config ]; then
+            cp ../X86/.config ./
+            echo "使用仓库 X86/.config 作为基础"
+          else
+            cat > .config << 'EOF'
+          CONFIG_TARGET_x86=y
+          CONFIG_TARGET_x86_64=y
+          CONFIG_TARGET_x86_64_DEVICE_generic=y
+          
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-theme-argon=y
+          
+          CONFIG_PACKAGE_firewall4=y
+          CONFIG_PACKAGE_nftables=y
+          CONFIG_PACKAGE_kmod-nft-core=y
+          
+          CONFIG_CLEAN_IPKG=y
+          CONFIG_BUILDBOT=y
+          EOF
+          fi
+
+          # 动态追加选中的插件
+          {
+            echo ""
+            echo "# 动态插件选择 (${{ github.run_number }})"
+            
+            [ "${{ inputs.enable_passwall }}" = "yes" ] && echo "CONFIG_PACKAGE_luci-app-passwall=y"
+            [ "${{ inputs.enable_mosdns }}" = "yes" ] && echo "CONFIG_PACKAGE_luci-app-mosdns=y"
+            [ "${{ inputs.enable_qmodem }}" = "yes" ] && echo "CONFIG_PACKAGE_luci-app-qmodem=y"
+            [ "${{ inputs.enable_zerotier }}" = "yes" ] && { echo "CONFIG_PACKAGE_luci-app-zerotier=y"; echo "CONFIG_PACKAGE_zerotier=y"; }
+            [ "${{ inputs.enable_adguardhome }}" = "yes" ] && echo "CONFIG_PACKAGE_luci-app-adguardhome=y"
+            [ "${{ inputs.enable_openclash }}" = "yes" ] && echo "CONFIG_PACKAGE_luci-app-openclash=y"
+            [ "${{ inputs.enable_serverchan }}" = "yes" ] && echo "CONFIG_PACKAGE_luci-app-serverchan=y"
+            [ "${{ inputs.enable_ttnode }}" = "yes" ] && echo "CONFIG_PACKAGE_luci-app-ttnode=y"
+            [ "${{ inputs.enable_alist }}" = "yes" ] && echo "CONFIG_PACKAGE_luci-app-alist=y"
+            [ "${{ inputs.enable_filebrowser }}" = "yes" ] && echo "CONFIG_PACKAGE_luci-app-filebrowser=y"
+            [ "${{ inputs.enable_docker }}" = "yes" ] && { echo "CONFIG_PACKAGE_docker=y"; echo "CONFIG_PACKAGE_dockerd=y"; }
+            [ "${{ inputs.enable_frpc }}" = "yes" ] && echo "CONFIG_PACKAGE_luci-app-frpc=y"
+            
+          } >> .config
+
+          make defconfig
+          
+          echo "最终 .config 插件部分："
+          grep -E "passwall|mosdns|qmodem|zerotier|adguard|openclash|serverchan|ttnode|alist|filebrowser|docker|frpc" .config || echo "无额外插件"
+
+      - name: Download dependencies
+        working-directory: ./lede
+        run: make download -j$(nproc) || make download -j1 V=s
+
+      - name: Build firmware
+        working-directory: ./lede
+        run: make -j$(nproc) V=s || make -j1 V=s
+
+      - name: Clean temporary files
+        run: rm -rf lede/tmp/* || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Thatdream-${{ github.run_number }}-${{ steps.timestamp.outputs.time }}
+          path: lede/bin/targets/**/*
+          retention-days: 7
