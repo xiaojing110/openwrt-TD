@@ -1,4 +1,4 @@
-name: 构建 LEDE 固件 (带自定义 .config)
+name: 构建 LEDE 固件
 
 on:
   workflow_dispatch:
@@ -7,11 +7,6 @@ on:
         description: '自定义后台 LAN IP（例如 192.168.5.1 或 10.0.0.1）'
         required: false
         default: '10.0.0.1'
-      ssh:
-        description: '启用 SSH 连接到 Actions（调试用）'
-        required: false
-        default: false
-        type: boolean
   schedule:
     - cron: '0 3 * * *'   # UTC 3:00 ≈ 北京时间 11:00
   push:
@@ -20,15 +15,12 @@ on:
 
 env:
   LAN_IP: ${{ github.event.inputs.lan_ip || '10.0.0.1' }}
-  # 本地 .config 文件路径（相对于仓库根目录）
-  # 推荐选项：
-  #   - 'X86/.config'          ← 如果你放在 X86 子目录
-  #   - '.config'              ← 如果直接放根目录
-  #   - 'config/040.config'    ← 参考你提供的例子
-  CONFIG_FILE: '.config'
-  
-  # 如果本地没有，可选的远程 raw 链接（公开可访问）
-  REMOTE_CONFIG_URL: "https://github.com/xiaojing110/openwrt-TD/edit/main/.config"   # 留空则不尝试远程下载；或填 https://raw.githubusercontent.com/你的用户名/仓库/分支/X86/.config
+
+  # 固定读取本仓库的 config 文件（参考你给的 Build_XG_040G_MD 写法）
+  # 你必须保证这个文件真实存在！
+  CONFIG_FILE: 'X86/.config'
+
+  TZ: Asia/Shanghai
 
 jobs:
   build:
@@ -39,6 +31,10 @@ jobs:
     steps:
       - name: 检出仓库代码
         uses: actions/checkout@v4
+
+      - name: 设置时区
+        run: |
+          sudo timedatectl set-timezone "${TZ}"
 
       - name: 安装编译依赖
         run: |
@@ -71,7 +67,6 @@ jobs:
       - name: 克隆 LEDE 源码
         run: |
           git clone https://github.com/coolsnowwolf/lede.git lede
-          cd lede
 
       - name: 修改 feeds.conf.default
         working-directory: ./lede
@@ -80,156 +75,124 @@ jobs:
           sed -i 's/^#src-git qmodem/src-git qmodem/' feeds.conf.default || true
           echo "src-git mosdns https://github.com/sbwml/luci-app-mosdns.git" >> feeds.conf.default
 
-      - name: 更新并安装 feeds
+      - name: 更新并安装 feeds（重要：放在 .config 之前）
         working-directory: ./lede
         run: |
           ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          ./scripts/feeds install -a -f
 
       # ────────────────────────────────────────────────
-      # 加载自定义 .config（参考你提供的代码风格）
+      # 固定加载本仓库指定的 .config（参考你的 Build_XG_040G_MD 写法）
       # ────────────────────────────────────────────────
-      - name: 加载自定义 .config 文件
-        working-directory: ./lede
+      - name: 加载指定 .config 配置文件
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "尝试加载 .config 文件"
-          echo "优先使用本地文件：${{ env.CONFIG_FILE }}"
+          echo "开始加载指定配置文件: ${{ env.CONFIG_FILE }}"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-          CONFIG_PLACED=false
-          CONFIG_SOURCE="未找到"
-
-          # 优先：从仓库复制本地 .config
-          if [ -f "../../${{ env.CONFIG_FILE }}" ]; then
-            echo "✓ 找到本地文件：${{ env.CONFIG_FILE }}"
-            cp -f "../../${{ env.CONFIG_FILE }}" ./.config
-            CONFIG_PLACED=true
-            CONFIG_SOURCE="本地 ${{ env.CONFIG_FILE }}"
-          else
-            echo "本地文件 ${{ env.CONFIG_FILE }} 不存在"
+          if [ ! -f "${{ env.CONFIG_FILE }}" ]; then
+            echo "❌ 错误：找不到配置文件 ${{ env.CONFIG_FILE }}"
+            echo "请确认你的仓库里存在该文件！"
+            exit 1
           fi
 
-          # 如果本地没有 → 尝试远程下载
-          if [ "$CONFIG_PLACED" = false ] && [ -n "${{ env.REMOTE_CONFIG_URL }}" ]; then
-            echo "本地未找到，开始从远程下载..."
-            echo "URL: ${{ env.REMOTE_CONFIG_URL }}"
-            wget --no-check-certificate -t 3 -T 15 -O ./.config "${{ env.REMOTE_CONFIG_URL }}" || {
-              echo "× 下载失败"
-            }
-            if [ -s ./.config ] && grep -q "^CONFIG_" ./.config; then
-              echo "✓ 远程下载成功"
-              CONFIG_PLACED=true
-              CONFIG_SOURCE="远程 ${{ env.REMOTE_CONFIG_URL }}"
-            else
-              echo "× 远程文件无效或下载失败"
-              rm -f ./.config
-            fi
-          fi
+          cp -fv "${{ env.CONFIG_FILE }}" lede/.config
 
-          # 最终判断
-          if [ "$CONFIG_PLACED" = true ]; then
-            echo "成功加载 .config！来源：$CONFIG_SOURCE"
-            echo "大小：$(stat -c %s ./.config) 字节"
-            echo "关键配置预览："
-            grep -E "CONFIG_TARGET_|CONFIG_PACKAGE_luci|passwall|mosdns|argon" ./.config || echo "(无匹配)"
-          else
-            echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-            echo "  警告：未找到任何 .config 文件！"
-            echo "  将使用默认配置编译（可能缺少插件）"
-            echo "  请检查："
-            echo "    - 仓库中是否有 ${{ env.CONFIG_FILE }}？"
-            echo "    - REMOTE_CONFIG_URL 是否正确设置？"
-            echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-            # 如需强制要求 .config，可打开下面一行：
-            # exit 1
-          fi
+          echo ""
+          echo "✓ 已成功复制 .config 到 lede/.config"
+          echo "文件大小：$(stat -c %s lede/.config) 字节"
+          echo "前 10 行预览："
+          head -n 10 lede/.config || true
 
-      - name: 执行 defconfig
+      - name: 执行 defconfig 并显示摘要
         working-directory: ./lede
         run: |
           make defconfig
-          echo "defconfig 后关键配置："
-          grep -E "TARGET_|luci|passwall|mosdns|argon|xray" .config || echo "(无匹配项)"
+          echo "最终 .config 关键配置预览："
+          grep -E "CONFIG_TARGET_|CONFIG_PACKAGE_luci|CONFIG_PACKAGE_passwall|CONFIG_PACKAGE_mosdns|CONFIG_PACKAGE_luci-theme-argon" .config | sort | uniq || true
 
-      - name: 替换 luci-app-passwall（使用最新版）
+      - name: 替换 luci-app-passwall（稀疏检出最新版）
         working-directory: ./lede/feeds/luci/applications
         run: |
           rm -rf luci-app-passwall || true
-          git clone --depth=1 https://github.com/Openwrt-Passwall/openwrt-passwall.git temp
-          cd temp
+          git clone --depth=1 https://github.com/Openwrt-Passwall/openwrt-passwall.git temp-passwall
+          cd temp-passwall
           git sparse-checkout init --cone
           git sparse-checkout set luci-app-passwall
           git checkout
           mv luci-app-passwall ../../
           cd ..
-          rm -rf temp
+          rm -rf temp-passwall
 
-      - name: 应用自定义补丁（LAN IP + 主题）
+      - name: 应用自定义补丁（LAN IP + Argon 主题）
         working-directory: ./lede
         run: |
-          FULL_IP="${{ env.LAN_IP }}"
+          export FULL_IP="${{ env.LAN_IP }}"
           PREFIX_3=$(echo "$FULL_IP" | cut -d. -f1-3).
           PREFIX_2=$(echo "$FULL_IP" | cut -d. -f1-2).
+
           sed -i "s/192.168.1.1/$FULL_IP/g" package/base-files/files/bin/config_generate
           sed -i "s/192.168.1./$PREFIX_3/g" package/base-files/files/bin/config_generate
           sed -i "s/192.168./$PREFIX_2/g" package/base-files/files/bin/config_generate
           sed -i "s/192\.168\.1\.[0-9]\+/$FULL_IP/g" package/base-files/files/bin/config_generate
 
-          # 强制 Argon 主题
+          # 强制使用 Argon 主题
           find feeds/luci/collections/ -type f -name Makefile -exec \
             sed -i -E 's/(luci-theme-)[a-zA-Z0-9_-]+/\1argon/g' {} \;
 
-      - name: 缓存 dl 和 staging_dir
+      - name: 缓存下载文件
         uses: actions/cache@v4
         with:
-          path: |
-            lede/dl
-            lede/staging_dir
-          key: ${{ runner.os }}-lede-build-${{ hashFiles('lede/.config') }}
-          restore-keys: ${{ runner.os }}-lede-build-
+          path: lede/dl
+          key: ${{ runner.os }}-lede-dl-${{ hashFiles('lede/.config') }}
+          restore-keys: ${{ runner.os }}-lede-dl-
+
+      - name: 缓存工具链
+        uses: actions/cache@v4
+        with:
+          path: lede/staging_dir
+          key: ${{ runner.os }}-lede-toolchain-${{ hashFiles('lede/.config') }}
+          restore-keys: ${{ runner.os }}-lede-toolchain-
 
       - name: 下载依赖包
         working-directory: ./lede
-        run: make download -j$(nproc) || make download -j1 V=s
+        run: |
+          make download -j$(nproc) || make download -j1 V=s
 
       - name: 编译固件
         working-directory: ./lede
         run: |
           make -j$(nproc) V=s || make -j1 V=s
 
-      - name: 生成说明文件
+      - name: 生成固件说明文件
         working-directory: ./lede
         run: |
           mkdir -p bin/targets/x86/64
           cat > bin/targets/x86/64/固件说明.txt << EOF
           ==================== LEDE 固件信息 ====================
-          目标: x86_64 generic
-          编译时间: $(date '+%Y-%m-%d %H:%M:%S %Z')
-          后台: http://${{ env.LAN_IP }}
-          用户: root / password
-          .config 来源: ${{ env.CONFIG_FILE }} 或远程
-          备注: PassWall + MosDNS + Argon 主题
+          固件目标: x86_64 generic
+          编译时间: $(date '+%Y-%m-%d %H:%M:%S')
+          后台地址: http://${{ env.LAN_IP }}
+          用户名: root
+          密码: password
+          备注：已预装 PassWall + MosDNS + Argon 主题
+          使用配置文件: ${{ env.CONFIG_FILE }}
           EOF
 
-      - name: 上传 artifact
+      - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: lede-x86_64-run${{ github.run_number }}
+          name: lede-x86_64-${{ github.run_number }}
           path: lede/bin/targets/x86/64/*
           retention-days: 14
 
-      - name: 发布 Release
+      - name: 发布到 GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
           name: LEDE x86_64 - ${{ env.LAN_IP }} - ${{ github.run_number }}
           body_path: lede/bin/targets/x86/64/固件说明.txt
-          files: lede/bin/targets/x86/64/*
+          files: |
+            lede/bin/targets/x86/64/*
           draft: false
           prerelease: false
-
-      # 可选：调试用 SSH（参考你提供的代码）
-      - name: SSH 连接（调试）
-        if: ${{ github.event.inputs.ssh == 'true' || contains(github.event.action, 'ssh') }}
-        uses: csexton/debugger-action@master
