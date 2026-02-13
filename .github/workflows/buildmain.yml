@@ -15,11 +15,10 @@ on:
 
 env:
   LAN_IP: ${{ github.event.inputs.lan_ip || '10.0.0.1' }}
-  # ← 必须替换成你真实的远程 .config raw URL（公开可访问）
-  # 示例：
-  # REMOTE_CONFIG_URL: https://raw.githubusercontent.com/xiaojing110/你的仓库名/main/X86/.config
-  # 或根目录的： https://raw.githubusercontent.com/xiaojing110/你的仓库名/main/.config
-  REMOTE_CONFIG_URL: "https://github.com/xiaojing110/openwrt-TD/blob/main/X86/.config"   # ← 这里填你的 URL！！！如果不填则跳过远程下载
+  # 必须是 raw.githubusercontent.com 开头的纯文本链接！
+  # 示例正确：https://raw.githubusercontent.com/你的用户名/你的仓库/main/X86/.config
+  # 当前示例仓库似乎无内容，请替换成你真实的 .config raw 地址
+  REMOTE_CONFIG_URL: "https://raw.githubusercontent.com/xiaojing110/openwrt-TD/main/X86/.config"
 
 jobs:
   build:
@@ -78,91 +77,91 @@ jobs:
           ./scripts/feeds install -a
 
       # ────────────────────────────────────────────────
-      # 现在才处理 .config（源代码 + feeds 已就绪）
+      # 智能检测并放置 .config（必须在 defconfig 前完成）
       # ────────────────────────────────────────────────
-      - name: 检查本地并尝试远程下载 .config
+      - name: 智能检测并放置 .config 文件（必须在 defconfig 之前）
         working-directory: ./lede
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "源代码和 feeds 已更新，现在处理 .config 文件"
+          echo "  开始智能查找并放置 .config 文件"
+          echo "  优先级：根目录 → X86/ → 远程 URL → 默认（警告）"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-          FOUND=false
+          CONFIG_PLACED=false
+          CONFIG_SOURCE="未找到"
 
-          # 检查根目录 .config（从 lede 目录向上看 ../.config）
+          # 优先级 1：仓库根目录 .config
           if [ -f "../../.config" ]; then
             echo "✓ 找到仓库根目录 .config"
-            cp "../../.config" ./.config
-            FOUND=true
+            cp -f "../../.config" ./.config
+            CONFIG_PLACED=true
+            CONFIG_SOURCE="仓库根目录 .config"
+          fi
+
+          # 优先级 2：X86/.config
+          if [ "$CONFIG_PLACED" = false ] && [ -f "../../X86/.config" ]; then
+            echo "✓ 找到 X86/.config"
+            cp -f "../../X86/.config" ./.config
+            CONFIG_PLACED=true
+            CONFIG_SOURCE="X86/.config"
+          fi
+
+          # 优先级 3：远程 raw URL
+          if [ "$CONFIG_PLACED" = false ] && [ -n "${{ env.REMOTE_CONFIG_URL }}" ]; then
+            echo "本地未找到 .config，开始从远程下载..."
+            echo "URL: ${{ env.REMOTE_CONFIG_URL }}"
+
+            wget --no-check-certificate -t 3 -T 15 -O ./.config "${{ env.REMOTE_CONFIG_URL }}" 2>&1 || {
+              echo "× wget 下载失败（网络/URL/权限问题）"
+            }
+
+            if [ -s ./.config ] && grep -q "^CONFIG_" ./.config; then
+              echo "✓ 远程下载成功，并通过简单格式校验（包含 CONFIG_ 开头）"
+              CONFIG_PLACED=true
+              CONFIG_SOURCE="远程 URL 下载"
+            else
+              echo "× 下载失败：文件为空 或 不像是有效的 .config"
+              rm -f ./.config
+            fi
+          fi
+
+          # 最终结果输出
+          if [ "$CONFIG_PLACED" = true ]; then
+            echo ""
+            echo "成功放置 .config 文件！来源：$CONFIG_SOURCE"
+            echo "文件大小：$(stat -c %s ./.config 2>/dev/null || echo '无法获取') 字节"
+            echo "前 10 行预览："
+            head -n 10 ./.config || echo "(无法读取)"
+            echo ""
+            echo "关键配置快速检查："
+            grep -E "CONFIG_TARGET_x86|CONFIG_LUCI_APP_PASSWALL|CONFIG_MOSDNS|CONFIG_luci-theme-argon|CONFIG_PACKAGE_luci-app-mosdns" ./.config || echo "（未匹配这些常见包）"
           else
-            echo "根目录 .config 不存在"
+            echo ""
+            echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+            echo "  严重警告：没有任何 .config 被找到或下载成功！"
+            echo "  将使用 LEDE 默认配置进行编译（很可能缺少你想要的插件）"
+            echo "  请立即检查："
+            echo "    1. 仓库根目录是否有 .config 文件？"
+            echo "    2. X86/.config 是否存在？"
+            echo "    3. REMOTE_CONFIG_URL 是否指向正确的 raw 链接？（当前：${{ env.REMOTE_CONFIG_URL }}）"
+            echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+            echo ""
+            # 如果你希望强制要求有 .config，可取消下面这行注释
+            # exit 1
           fi
 
-          # 如果没有，再检查 X86/.config
-          if [ "$FOUND" = false ]; then
-            if [ -f "../../X86/.config" ]; then
-              echo "✓ 找到仓库 X86/.config"
-              cp "../../X86/.config" ./.config
-              FOUND=true
-            else
-              echo "X86/.config 不存在"
-            fi
-          fi
-
-          # 本地都没有 → 尝试远程下载
-          if [ "$FOUND" = false ]; then
-            if [ -n "${{ env.REMOTE_CONFIG_URL }}" ]; then
-              echo "本地未找到，开始远程下载 .config..."
-              wget -O ./.config "${{ env.REMOTE_CONFIG_URL }}" || {
-                echo "远程下载失败（URL可能无效或网络问题）"
-              }
-
-              if [ -s ./.config ]; then
-                echo "✓ 远程下载成功，大小 $(stat -c %s ./.config) 字节"
-                FOUND=true
-              else
-                echo "下载的文件为空或失败"
-                rm -f ./.config
-              fi
-            else
-              echo "未设置 REMOTE_CONFIG_URL，跳过远程下载"
-            fi
-          fi
-
-          # 最终兜底内置默认
-          if [ "$FOUND" = false ] || [ ! -s ./.config ]; then
-            echo "⚠️ 所有方式都未获取有效 .config，使用内置默认配置"
-            cat > ./.config << 'EOF'
-          CONFIG_TARGET_x86=y
-          CONFIG_TARGET_x86_64=y
-          CONFIG_TARGET_x86_64_DEVICE_generic=y
-
-          CONFIG_PACKAGE_luci=y
-          CONFIG_PACKAGE_luci-theme-argon=y
-
-          CONFIG_PACKAGE_luci-app-passwall=y
-          CONFIG_PACKAGE_luci-app-mosdns=y
-
-          CONFIG_PACKAGE_firewall4=y
-          CONFIG_PACKAGE_nftables=y
-          CONFIG_PACKAGE_kmod-nft-core=y
-
-          CONFIG_CLEAN_IPKG=y
-          CONFIG_BUILDBOT=y
-          EOF
-          fi
-
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo " .config 放置阶段结束"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
       - name: 执行 defconfig 并显示摘要
         working-directory: ./lede
         run: |
           make defconfig
-          echo "最终 .config 关键配置："
-          grep -E "TARGET_|luci|passwall|mosdns|argon|firewall4|xray" .config || echo "(无匹配项)"
+          echo "最终 .config 关键配置预览："
+          grep -E "TARGET_|luci|passwall|mosdns|argon|firewall4|xray|CONFIG_PACKAGE_" .config | sort | uniq || echo "(无匹配项)"
 
-      # 后续步骤（替换 passwall、grub 修复、补丁、缓存、编译等）
-      - name: 替换 luci-app-passwall（稀疏检出）
+      - name: 替换 luci-app-passwall（稀疏检出最新版）
         working-directory: ./lede/feeds/luci/applications
         run: |
           rm -rf luci-app-passwall || true
@@ -175,23 +174,19 @@ jobs:
           cd ..
           rm -rf temp-passwall
 
-      - name: 禁用 grub2 arm-efi
-        working-directory: ./lede
-        run: |
-          sed -i '/arm-efi/d' package/boot/grub2/Makefile || true
-          sed -i 's/GRUB2_EFI_IMAGES.*arm-efi.*$/GRUB2_EFI_IMAGES := x86_64-efi/' package/boot/grub2/Makefile || true
-
-      - name: 应用自定义补丁（IP + 主题）
+      - name: 应用自定义补丁（LAN IP + Argon 主题）
         working-directory: ./lede
         run: |
           export FULL_IP="${{ env.LAN_IP }}"
           PREFIX_3=$(echo "$FULL_IP" | cut -d. -f1-3).
           PREFIX_2=$(echo "$FULL_IP" | cut -d. -f1-2).
-
           sed -i "s/192.168.1.1/$FULL_IP/g" package/base-files/files/bin/config_generate
           sed -i "s/192.168.1./$PREFIX_3/g" package/base-files/files/bin/config_generate
           sed -i "s/192.168./$PREFIX_2/g" package/base-files/files/bin/config_generate
+          # 额外加强：覆盖任何可能的旧 IP
+          sed -i "s/192\.168\.1\.[0-9]\+/$FULL_IP/g" package/base-files/files/bin/config_generate
 
+          # 强制使用 Argon 主题
           find feeds/luci/collections/ -type f -name Makefile -exec \
             sed -i -E 's/(luci-theme-)[a-zA-Z0-9_-]+/\1argon/g' {} \;
 
@@ -223,14 +218,13 @@ jobs:
           mkdir -p bin/targets/x86/64
           cat > bin/targets/x86/64/固件说明.txt << EOF
           ==================== LEDE 固件信息 ====================
-
           固件目标: x86_64 generic
           编译时间: $(date '+%Y-%m-%d %H:%M:%S %Z')
           后台地址: http://${{ env.LAN_IP }}
           用户名: root
           密码: password
-
           备注：已预装 PassWall + MosDNS + Argon 主题
+          .config 来源：${CONFIG_SOURCE:-未指定（默认配置）}
           EOF
 
       - name: 上传构建产物
