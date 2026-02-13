@@ -1,4 +1,4 @@
-name: Build LEDE Firmware
+name: 构建 LEDE 固件
 
 on:
   workflow_dispatch:
@@ -23,46 +23,51 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout repository
+      - name: 检出仓库代码
         uses: actions/checkout@v4
 
-            - name: 检查并复制仓库中的 .config 文件
+      # 检查并准备 .config 文件（优先根目录 > X86 目录 > 内置默认）
+      - name: 检查并准备 .config 文件
         run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "强制列出仓库根目录所有文件（包括隐藏文件）"
-          ls -la .. | grep -i config || echo "（没有匹配 config 的文件）"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "开始检查仓库中的 .config 文件（根目录优先）"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          mkdir -p lede
+
+          # 显示根目录所有文件（包含隐藏文件）
+          echo "根目录文件列表（包含隐藏文件）："
+          ls -la .. | grep -i -E 'config|X86' || echo "（没有找到相关文件）"
 
           echo ""
           echo "检查根目录 .config："
           if [ -f "../.config" ]; then
-            echo "✓ 根目录 .config 存在"
-            ls -l "../.config"   # 显示大小、时间确认
-            mkdir -p lede
+            echo "✓ 找到根目录 .config"
+            ls -l "../.config"
             cp "../.config" lede/.config
-            echo "已复制根目录 .config 到 lede/.config"
+            echo "已使用根目录的 .config"
           else
             echo "根目录 .config 不存在"
           fi
 
-          echo ""
-          echo "检查 X86/.config："
-          if [ -d "../X86" ] && [ -f "../X86/.config" ]; then
-            echo "✓ X86/.config 存在"
-            ls -l "../X86/.config"
-            if [ ! -f "lede/.config" ]; then   # 如果根目录没复制，才用这个
-              mkdir -p lede
+          # 如果根目录没有，再检查 X86/.config
+          if [ ! -f "lede/.config" ]; then
+            echo ""
+            echo "检查 X86/.config："
+            if [ -d "../X86" ] && [ -f "../X86/.config" ]; then
+              echo "✓ 找到 X86/.config"
+              ls -l "../X86/.config"
               cp "../X86/.config" lede/.config
-              echo "已复制 X86/.config 到 lede/.config（根目录无文件）"
+              echo "已使用 X86 目录的 .config"
             else
-              echo "根目录已有 .config，优先使用它（跳过 X86 的）"
+              echo "X86 目录或 X86/.config 不存在"
             fi
-          else
-            echo "X86 目录或 X86/.config 不存在"
           fi
 
+          # 如果两个位置都没有，使用内置默认配置
           if [ ! -f "lede/.config" ]; then
-            echo "⚠️ 两个位置都没有找到 .config，使用内置默认配置"
-            mkdir -p lede
+            echo ""
+            echo "⚠️ 仓库中两个位置都没有 .config，使用内置默认配置"
             cat > lede/.config << 'EOF'
           CONFIG_TARGET_x86=y
           CONFIG_TARGET_x86_64=y
@@ -81,14 +86,15 @@ jobs:
           CONFIG_CLEAN_IPKG=y
           CONFIG_BUILDBOT=y
           EOF
+            echo "已生成内置默认 .config"
           else
-            echo "成功准备 .config 文件（来源：仓库）"
+            echo ""
+            echo "成功从仓库复制 .config 文件"
           fi
 
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-      - name: Install build dependencies
+      - name: 安装编译依赖
         run: |
           sudo apt update -y
           sudo apt full-upgrade -y
@@ -105,7 +111,7 @@ jobs:
           sudo apt clean
           sudo rm -rf /var/lib/apt/lists/*
 
-      - name: Maximize build space
+      - name: 最大化构建空间
         uses: easimon/maximize-build-space@master
         with:
           root-reserve-mb: 512
@@ -116,26 +122,26 @@ jobs:
           remove-codeql: 'true'
           remove-docker-images: 'true'
 
-      - name: Clone LEDE source
+      - name: 克隆 LEDE 源码
         run: |
           git clone https://github.com/coolsnowwolf/lede.git lede-src
-          mv lede-src/* lede/
+          mv lede-src/* lede/ || true
           rm -rf lede-src
 
-      - name: Modify feeds.conf.default
+      - name: 修改 feeds.conf.default
         working-directory: ./lede
         run: |
           sed -i '/^src-git luci/c\src-git luci https://github.com/coolsnowwolf/luci.git;openwrt-25.12' feeds.conf.default
           sed -i 's/^#src-git qmodem/src-git qmodem/' feeds.conf.default || true
           echo "src-git mosdns https://github.com/sbwml/luci-app-mosdns.git" >> feeds.conf.default
 
-      - name: Update and install feeds
+      - name: 更新并安装 feeds
         working-directory: ./lede
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Replace luci-app-passwall with sparse checkout
+      - name: 替换 luci-app-passwall（稀疏检出）
         working-directory: ./lede/feeds/luci/applications
         run: |
           rm -rf luci-app-passwall || true
@@ -148,13 +154,13 @@ jobs:
           cd ..
           rm -rf temp-passwall
 
-      - name: Disable grub2 arm-efi variant
-        working-directory: ./lede
-        run: |
-          sed -i '/arm-efi/d' package/boot/grub2/Makefile || true
-          sed -i 's/GRUB2_EFI_IMAGES.*arm-efi.*$/GRUB2_EFI_IMAGES := x86_64-efi/' package/boot/grub2/Makefile || true
+      #- name: 禁用 grub2 arm-efi 变体（修复 invalid ELF header 错误）
+       # working-directory: ./lede
+      #  run: |
+       #   sed -i '/arm-efi/d' package/boot/grub2/Makefile || true
+       #   sed -i 's/GRUB2_EFI_IMAGES.*arm-efi.*$/GRUB2_EFI_IMAGES := x86_64-efi/' package/boot/grub2/Makefile || true
 
-      - name: Apply custom patches (IP & theme)
+      - name: 应用自定义补丁（IP 和主题）
         working-directory: ./lede
         run: |
           export FULL_IP="${{ env.LAN_IP }}"
@@ -162,70 +168,46 @@ jobs:
           PREFIX_2=$(echo "$FULL_IP" | cut -d. -f1-2).
           PREFIX_1=$(echo "$FULL_IP" | cut -d. -f1).
 
-          echo "设置 LAN IP 为 $FULL_IP"
+          echo "设置后台 IP 为 $FULL_IP"
           sed -i "s/192.168.1.1/$FULL_IP/g"         package/base-files/files/bin/config_generate
           sed -i "s/192.168.1./$PREFIX_3/g"          package/base-files/files/bin/config_generate
           sed -i "s/192.168./$PREFIX_2/g"            package/base-files/files/bin/config_generate
 
-          echo "强制使用 luci-theme-argon"
+          echo "强制使用 luci-theme-argon 主题"
           find feeds/luci/collections/ -type f -name Makefile -exec \
             sed -i -E 's/(luci-theme-)[a-zA-Z0-9_-]+/\1argon/g' {} \;
 
-      # 如果前面没有找到任何 .config，这里补充默认配置
-      - name: Prepare default .config if missing
+      - name: 执行 defconfig 并显示配置摘要
         working-directory: ./lede
         run: |
-          if [ ! -f .config ]; then
-            echo "没有从仓库复制到任何 .config，使用内置默认配置"
-            cat > .config << 'EOF'
-          CONFIG_TARGET_x86=y
-          CONFIG_TARGET_x86_64=y
-          CONFIG_TARGET_x86_64_DEVICE_generic=y
-
-          CONFIG_PACKAGE_luci=y
-          CONFIG_PACKAGE_luci-theme-argon=y
-
-          CONFIG_PACKAGE_luci-app-passwall=y
-          CONFIG_PACKAGE_luci-app-mosdns=y
-
-          CONFIG_PACKAGE_firewall4=y
-          CONFIG_PACKAGE_nftables=y
-          CONFIG_PACKAGE_kmod-nft-core=y
-
-          CONFIG_CLEAN_IPKG=y
-          CONFIG_BUILDBOT=y
-          EOF
-          fi
-
           make defconfig
+          echo ""
+          echo "最终使用的 .config 关键配置项："
+          grep -E "TARGET_|luci|passwall|mosdns|argon|firewall4|xray|v2fly" .config || echo "(没有匹配项)"
 
-          echo "最终使用的 .config 关键项："
-          grep -E "TARGET_|luci|passwall|mosdns|argon|firewall4" .config || echo "(无匹配)"
-
-      # 后续编译步骤...
-      - name: Cache downloads
+      - name: 缓存下载文件
         uses: actions/cache@v4
         with:
           path: lede/dl
           key: ${{ runner.os }}-lede-dl-${{ hashFiles('lede/.config') }}
           restore-keys: ${{ runner.os }}-lede-dl-
 
-      - name: Cache toolchain
+      - name: 缓存工具链
         uses: actions/cache@v4
         with:
           path: lede/staging_dir
           key: ${{ runner.os }}-lede-toolchain-${{ hashFiles('lede/.config') }}
           restore-keys: ${{ runner.os }}-lede-toolchain-
 
-      - name: Download dependencies
+      - name: 下载依赖包
         working-directory: ./lede
         run: make download -j$(nproc) || make download -j1 V=s
 
-      - name: Build firmware
+      - name: 编译固件
         working-directory: ./lede
         run: make -j$(nproc) V=s || make -j1 V=s
 
-      - name: Generate firmware info
+      - name: 生成固件说明文件
         working-directory: ./lede
         run: |
           mkdir -p bin/targets/x86/64
@@ -236,7 +218,7 @@ jobs:
           编译时间: $(date '+%Y-%m-%d %H:%M:%S %Z')
           后台地址: http://${{ env.LAN_IP }}
           用户名: root
-          密码: password（首次登录 LuCI 后自行设置）
+          密码: 无（首次登录 LuCI 后自行设置）
 
           仓库: ${{ github.repository }}
           分支: ${{ github.ref_name }}
@@ -246,18 +228,18 @@ jobs:
           备注：
           • 主题：Argon
           • 预装：PassWall + MosDNS
-          • IP：${{ env.LAN_IP }} （自定义输入）
+          • IP：${{ env.LAN_IP }} （可通过手动触发 workflow 自定义）
 
           EOF
 
-      - name: Upload artifact
+      - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
           name: lede-x86_64-${{ github.run_number }}
           path: lede/bin/targets/x86/64/*
           retention-days: 14
 
-      - name: Release to GitHub
+      - name: 发布到 GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
