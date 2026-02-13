@@ -81,28 +81,42 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a -f
 
-      # ────────────────────────────────────────────────
-      # 固定加载本仓库指定的 .config（参考你的 Build_XG_040G_MD 写法）
-      # ────────────────────────────────────────────────
-      - name: 加载指定 .config 配置文件
+      - name: 加载配置文件（支持三种路径）
+        working-directory: ${{ github.workspace }}
         run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "开始加载指定配置文件: ${{ env.CONFIG_FILE }}"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "开始查找 .config 配置文件..."
 
-          if [ ! -f "${{ env.CONFIG_FILE }}" ]; then
-            echo "❌ 错误：找不到配置文件 ${{ env.CONFIG_FILE }}"
-            echo "请确认你的仓库里存在该文件！"
+          FOUND_CONFIG=""
+
+          # 优先：仓库根目录
+          if [ -f ".config" ]; then
+            FOUND_CONFIG=".config"
+          fi
+
+          # 其次：X86/.config
+          if [ -z "$FOUND_CONFIG" ] && [ -f "X86/.config" ]; then
+            FOUND_CONFIG="X86/.config"
+          fi
+
+          # 再次：X86/X86.config
+          if [ -z "$FOUND_CONFIG" ] && [ -f "X86/X86.config" ]; then
+            FOUND_CONFIG="X86/X86.config"
+          fi
+
+          # 如果仍未找到则报错
+          if [ -z "$FOUND_CONFIG" ]; then
+            echo "❌ 错误：未找到任何有效的 .config"
+            echo "请检查仓库根目录 或 X86/ 目录是否存在 .config 或 X86.config"
             exit 1
           fi
 
-          cp -fv "${{ env.CONFIG_FILE }}" lede/.config
+          echo "✔ 找到配置文件：$FOUND_CONFIG"
+          echo "复制到 lede/.config"
+          cp -f "$FOUND_CONFIG" lede/.config
 
           echo ""
-          echo "✓ 已成功复制 .config 到 lede/.config"
-          echo "文件大小：$(stat -c %s lede/.config) 字节"
-          echo "前 10 行预览："
-          head -n 10 lede/.config || true
+          echo "当前 .config 头部预览："
+          head -n 15 lede/.config || true
 
       - name: 执行 defconfig 并显示摘要
         working-directory: ./lede
