@@ -17,6 +17,11 @@ on:
         required: false
         default: '10.0.0.1'
 
+      config_url:
+        description: '自定义 .config 地址（填写则优先使用此配置文件）'
+        required: false
+        default: ''
+
   schedule:
     - cron: '0 3 * * *'   # UTC 3:00 ≈ 北京时间 11:00
 
@@ -26,11 +31,12 @@ on:
 
 env:
   LAN_IP: ${{ github.event.inputs.lan_ip || '10.0.0.1' }}
-
-  # 默认 lede，如果用户手动选择 immortalwrt 就切换
   SOURCE: ${{ github.event.inputs.source || 'lede' }}
 
-  # config raw 下载备用
+  # 用户自定义 config 地址（如果填了就优先用它）
+  CUSTOM_CONFIG_URL: ${{ github.event.inputs.config_url || '' }}
+
+  # 默认 raw 下载备用 config
   REMOTE_CONFIG_URL: "https://raw.githubusercontent.com/xiaojing110/openwrt-TD/main/X86/.config"
 
   TZ: Asia/Shanghai
@@ -164,38 +170,21 @@ jobs:
           ./scripts/feeds install -a -f
 
       # ────────────────────────────────────────────────
-      # 优先使用仓库 config，如果找不到就 raw 下载
+      # 优先使用用户输入 config_url，否则用仓库配置，否则用默认 raw
       # ────────────────────────────────────────────────
-      - name: 加载 .config（仓库优先，不行自动 raw 下载）
+      - name: 加载 .config（支持自定义 config_url 优先）
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "开始查找仓库中的 .config 文件..."
-          echo "优先级："
-          echo "  1) ./.config"
-          echo "  2) ./X86/.config"
-          echo "  3) ./X86/X86.config"
-          echo "找不到则使用远程 raw 下载："
-          echo "  ${{ env.REMOTE_CONFIG_URL }}"
+          echo "开始加载配置文件 .config..."
+          echo "自定义 config_url: ${{ env.CUSTOM_CONFIG_URL }}"
+          echo "默认 raw URL:      ${{ env.REMOTE_CONFIG_URL }}"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-          FOUND_CONFIG=""
-
-          if [ -f ".config" ]; then
-            FOUND_CONFIG=".config"
-          elif [ -f "X86/.config" ]; then
-            FOUND_CONFIG="X86/.config"
-          elif [ -f "X86/X86.config" ]; then
-            FOUND_CONFIG="X86/X86.config"
-          fi
-
-          if [ -n "$FOUND_CONFIG" ]; then
-            echo "✔ 已找到仓库配置文件：$FOUND_CONFIG"
-            cp -fv "$FOUND_CONFIG" lede/.config
-          else
-            echo "⚠️ 仓库内未找到任何 .config，准备使用 raw 下载..."
-
-            wget -O lede/.config "${{ env.REMOTE_CONFIG_URL }}" || {
-              echo "❌ raw 下载失败，请检查 URL 是否正确"
+          # 1) 如果用户输入了 config_url，直接优先使用
+          if [ -n "${{ env.CUSTOM_CONFIG_URL }}" ]; then
+            echo "✔ 检测到用户自定义 config_url，优先下载..."
+            wget -O lede/.config "${{ env.CUSTOM_CONFIG_URL }}" || {
+              echo "❌ 自定义 config_url 下载失败，请检查地址是否正确"
               exit 1
             }
 
@@ -204,7 +193,45 @@ jobs:
               exit 1
             fi
 
-            echo "✔ raw 下载成功"
+            echo "✔ 自定义 config_url 下载成功"
+
+          else
+            echo "⚠️ 未填写 config_url，开始查找仓库中的 .config 文件..."
+            echo "优先级："
+            echo "  1) ./.config"
+            echo "  2) ./X86/.config"
+            echo "  3) ./X86/X86.config"
+            echo "找不到则使用默认 raw 下载"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+            FOUND_CONFIG=""
+
+            if [ -f ".config" ]; then
+              FOUND_CONFIG=".config"
+            elif [ -f "X86/.config" ]; then
+              FOUND_CONFIG="X86/.config"
+            elif [ -f "X86/X86.config" ]; then
+              FOUND_CONFIG="X86/X86.config"
+            fi
+
+            if [ -n "$FOUND_CONFIG" ]; then
+              echo "✔ 已找到仓库配置文件：$FOUND_CONFIG"
+              cp -fv "$FOUND_CONFIG" lede/.config
+            else
+              echo "⚠️ 仓库内未找到任何 .config，准备使用默认 raw 下载..."
+
+              wget -O lede/.config "${{ env.REMOTE_CONFIG_URL }}" || {
+                echo "❌ raw 下载失败，请检查 URL 是否正确"
+                exit 1
+              }
+
+              if [ ! -s "lede/.config" ]; then
+                echo "❌ 下载成功但文件为空，停止运行"
+                exit 1
+              fi
+
+              echo "✔ 默认 raw 下载成功"
+            fi
           fi
 
           echo ""
@@ -284,12 +311,14 @@ jobs:
           cat > bin/targets/x86/64/固件说明.txt << EOF
           ==================== OpenWrt 固件信息 ====================
           源码来源: ${{ env.SOURCE }}
-          固件目标: x86_64 generic
           编译时间: $(date '+%Y-%m-%d %H:%M:%S')
           后台地址: http://${{ env.LAN_IP }}
           用户名: root
           密码: password
           备注：已预装 PassWall + MosDNS + Argon 主题
+          配置来源：优先 config_url -> 仓库 config -> 默认 raw
+          config_url: ${{ env.CUSTOM_CONFIG_URL }}
+          默认 raw URL: ${{ env.REMOTE_CONFIG_URL }}
           EOF
 
       - name: 上传构建产物
