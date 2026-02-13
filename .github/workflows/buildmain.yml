@@ -16,9 +16,11 @@ on:
 env:
   LAN_IP: ${{ github.event.inputs.lan_ip || '10.0.0.1' }}
 
-  # 固定读取本仓库的 config 文件（参考你给的 Build_XG_040G_MD 写法）
-  # 你必须保证这个文件真实存在！
-  CONFIG_FILE: 'X86/x86.config'
+  # 优先使用仓库中的配置文件（按顺序查找）
+  # 1. .config
+  # 2. X86/.config
+  # 3. X86/X86.config
+  REMOTE_CONFIG_URL: "https://raw.githubusercontent.com/xiaojing110/openwrt-TD/main/X86/.config"
 
   TZ: Asia/Shanghai
 
@@ -29,8 +31,36 @@ jobs:
       contents: write
 
     steps:
-      - name: 检出仓库代码
+      - name: 检出仓库代码（强制 main）
         uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: 显示仓库文件结构（调试必备）
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "当前目录："
+          pwd
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "根目录文件："
+          ls -la
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "X86 目录文件："
+          ls -la X86 || echo "⚠️ X86 文件夹不存在"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "查找 config 文件："
+          find . -maxdepth 3 -type f \( -name ".config" -o -name "*.config" \) || true
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Git 状态："
+          git status || true
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "当前分支："
+          git branch -a || true
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "当前 commit："
+          git log -1 --oneline || true
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
       - name: 设置时区
         run: |
@@ -81,49 +111,66 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a -f
 
-      - name: 加载配置文件（支持三种路径）
-        working-directory: ${{ github.workspace }}
+      # ────────────────────────────────────────────────
+      # 优先使用仓库 config，如果找不到就 raw 下载
+      # ────────────────────────────────────────────────
+      - name: 加载 .config（仓库优先，不行自动 raw 下载）
         run: |
-          echo "开始查找 .config 配置文件..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "开始查找仓库中的 .config 文件..."
+          echo "优先级："
+          echo "  1) ./.config"
+          echo "  2) ./X86/.config"
+          echo "  3) ./X86/X86.config"
+          echo "找不到则使用远程 raw 下载："
+          echo "  ${{ env.REMOTE_CONFIG_URL }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
           FOUND_CONFIG=""
 
-          # 优先：仓库根目录
           if [ -f ".config" ]; then
             FOUND_CONFIG=".config"
-          fi
-
-          # 其次：X86/.config
-          if [ -z "$FOUND_CONFIG" ] && [ -f "X86/.config" ]; then
+          elif [ -f "X86/.config" ]; then
             FOUND_CONFIG="X86/.config"
-          fi
-
-          # 再次：X86/X86.config
-          if [ -z "$FOUND_CONFIG" ] && [ -f "X86/X86.config" ]; then
+          elif [ -f "X86/X86.config" ]; then
             FOUND_CONFIG="X86/X86.config"
           fi
 
-          # 如果仍未找到则报错
-          if [ -z "$FOUND_CONFIG" ]; then
-            echo "❌ 错误：未找到任何有效的 .config"
-            echo "请检查仓库根目录 或 X86/ 目录是否存在 .config 或 X86.config"
-            exit 1
+          if [ -n "$FOUND_CONFIG" ]; then
+            echo "✔ 已找到仓库配置文件：$FOUND_CONFIG"
+            cp -fv "$FOUND_CONFIG" lede/.config
+          else
+            echo "⚠️ 仓库内未找到任何 .config，准备使用 raw 下载..."
+
+            wget -O lede/.config "${{ env.REMOTE_CONFIG_URL }}" || {
+              echo "❌ raw 下载失败，请检查 URL 是否正确"
+              exit 1
+            }
+
+            if [ ! -s "lede/.config" ]; then
+              echo "❌ 下载成功但文件为空，停止运行"
+              exit 1
+            fi
+
+            echo "✔ raw 下载成功"
           fi
 
-          echo "✔ 找到配置文件：$FOUND_CONFIG"
-          echo "复制到 lede/.config"
-          cp -f "$FOUND_CONFIG" lede/.config
-
           echo ""
-          echo "当前 .config 头部预览："
-          head -n 15 lede/.config || true
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "最终 lede/.config 文件信息："
+          ls -la lede/.config
+          echo "前 20 行预览："
+          head -n 20 lede/.config || true
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
       - name: 执行 defconfig 并显示摘要
         working-directory: ./lede
         run: |
           make defconfig
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "最终 .config 关键配置预览："
           grep -E "CONFIG_TARGET_|CONFIG_PACKAGE_luci|CONFIG_PACKAGE_passwall|CONFIG_PACKAGE_mosdns|CONFIG_PACKAGE_luci-theme-argon" .config | sort | uniq || true
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
       - name: 替换 luci-app-passwall（稀疏检出最新版）
         working-directory: ./lede/feeds/luci/applications
@@ -190,7 +237,8 @@ jobs:
           用户名: root
           密码: password
           备注：已预装 PassWall + MosDNS + Argon 主题
-          使用配置文件: ${{ env.CONFIG_FILE }}
+          配置来源：仓库优先，失败则 raw 下载
+          raw URL: ${{ env.REMOTE_CONFIG_URL }}
           EOF
 
       - name: 上传构建产物
