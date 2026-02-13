@@ -1,0 +1,222 @@
+name: Build LEDE Firmware
+
+on:
+  workflow_dispatch:
+    inputs:
+      use_custom_config:
+        description: '是否启用自定义配置（IP/主题/插件追加）'
+        required: false
+        type: choice
+        options: ['yes', 'no']
+        default: 'no'
+      custom_lan_ip:
+        description: '自定义后台 IP（仅在启用自定义配置时有效，默认 10.0.0.1）'
+        required: false
+        default: '10.0.0.1'
+        type: string
+      enable_passwall:
+        description: '包含 Passwall（代理/翻墙工具）'
+        required: false
+        type: choice
+        options: ['yes', 'no']
+        default: 'no'
+      enable_mosdns:
+        description: '包含 MosDNS（智能 DNS 分流）'
+        required: false
+        type: choice
+        options: ['yes', 'no']
+        default: 'no'
+      enable_qmodem:
+        description: '包含 Qmodem（如果 feed 已加）'
+        required: false
+        type: choice
+        options: ['yes', 'no']
+        default: 'no'
+      enable_zerotier:
+        description: '包含 ZeroTier（虚拟局域网）'
+        required: false
+        type: choice
+        options: ['yes', 'no']
+        default: 'no'
+      enable_adguardhome:
+        description: '包含 AdGuard Home（去广告 + DNS）'
+        required: false
+        type: choice
+        options: ['yes', 'no']
+        default: 'no'
+      enable_openclash:
+        description: '包含 OpenClash（Clash 代理客户端）'
+        required: false
+        type: choice
+        options: ['yes', 'no']
+        default: 'no'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Generate timestamp for filename
+        id: timestamp
+        run: echo "time=$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
+
+      - name: Install build dependencies
+        run: |
+          sudo apt update -y && sudo apt full-upgrade -y
+          sudo apt install -y \
+            ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
+            bzip2 ccache clang cmake cpio curl device-tree-compiler flex gawk gcc-multilib \
+            g++-multilib gettext genisoimage git gperf haveged help2man intltool \
+            libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev \
+            libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev \
+            libreadline-dev libssl-dev libtool llvm lrzsz libnsl-dev ninja-build p7zip \
+            p7zip-full patch pkgconf python3 python3-pyelftools python3-setuptools \
+            qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs \
+            upx-ucl unzip vim wget xmlto xxd zlib1g-dev
+          sudo apt clean
+
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 512
+          swap-size-mb: 2048
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+
+      - name: Clone LEDE source
+        run: |
+          git clone https://github.com/coolsnowwolf/lede.git
+          cd lede
+
+      - name: Modify feeds.conf.default
+        working-directory: ./lede
+        run: |
+          sed -i '/^src-git luci/c\src-git luci https://github.com/coolsnowwolf/luci.git;openwrt-25.12' feeds.conf.default
+          sed -i 's/^#src-git qmodem/src-git qmodem/' feeds.conf.default || true
+          echo "src-git mosdns https://github.com/sbwml/luci-app-mosdns.git" >> feeds.conf.default
+          cat feeds.conf.default
+
+      - name: Update and install feeds
+        working-directory: ./lede
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Replace luci-app-passwall (if enabled and custom config)
+        if: ${{ inputs.enable_passwall == 'yes' && inputs.use_custom_config == 'yes' }}
+        working-directory: ./lede/feeds/luci/applications
+        run: |
+          rm -rf luci-app-passwall || true
+          git clone --depth=1 https://github.com/Openwrt-Passwall/openwrt-passwall.git temp
+          cd temp
+          git sparse-checkout init --cone
+          git sparse-checkout set luci-app-passwall
+          git checkout
+          mv luci-app-passwall ../../
+          cd .. && rm -rf temp
+
+      - name: Apply custom IP, theme and patches
+        if: ${{ inputs.use_custom_config == 'yes' }}
+        working-directory: ./lede
+        run: |
+          LAN_IP="${{ inputs.custom_lan_ip }}"
+          echo "设置后台 IP 为: $LAN_IP"
+          
+          PREFIX="${LAN_IP%.*}."
+          PREFIX_SHORT="${LAN_IP%.*.*}."
+          
+          # 修改默认 LAN IP 配置
+          sed -i "s/192.168.1.1/$LAN_IP/g" package/base-files/files/bin/config_generate
+          sed -i "s/192.168.1\./$PREFIX/g"   package/base-files/files/bin/config_generate
+          sed -i "s/192.168\./$PREFIX_SHORT/g" package/base-files/files/bin/config_generate
+          
+          # 可选：全局搜索替换（谨慎，建议只在必要时开启）
+          # find package/ -type f -name "*.sh" -o -name "*.config" -exec sed -i "s/192.168.1.1/$LAN_IP/g" {} \;
+          # find package/ -type f -name "*.sh" -o -name "*.config" -exec sed -i "s/192.168.1\./$PREFIX/g" {} \;
+          
+          # 强制使用 argon 主题
+          find feeds/luci/collections/ -type f -name Makefile -exec \
+            sed -i -E 's/(luci-theme-)[a-zA-Z0-9_-]+/\1argon/g' {} \;
+
+      - name: Cache downloads
+        uses: actions/cache@v4
+        with:
+          path: lede/dl
+          key: ${{ runner.os }}-lede-downloads-${{ hashFiles('lede/.config') }}
+          restore-keys: ${{ runner.os }}-lede-downloads-
+
+      - name: Cache toolchain
+        uses: actions/cache@v4
+        with:
+          path: lede/staging_dir
+          key: ${{ runner.os }}-lede-toolchain-${{ hashFiles('lede/.config') }}
+          restore-keys: ${{ runner.os }}-lede-toolchain-
+
+      - name: Prepare .config
+        working-directory: ./lede
+        run: |
+          # 优先使用仓库中预置的 X86/.config
+          if [ -f ../X86/.config ]; then
+            cp ../X86/.config ./
+            echo "使用仓库中的 X86/.config 作为基础配置"
+          else
+            # 极少情况下的保底配置
+            cat > .config << 'EOF'
+          CONFIG_TARGET_x86=y
+          CONFIG_TARGET_x86_64=y
+          CONFIG_TARGET_x86_64_DEVICE_generic=y
+          
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-theme-argon=y
+          
+          CONFIG_PACKAGE_firewall4=y
+          CONFIG_PACKAGE_nftables=y
+          CONFIG_PACKAGE_kmod-nft-core=y
+          
+          CONFIG_CLEAN_IPKG=y
+          CONFIG_BUILDBOT=y
+          EOF
+            echo "未找到 X86/.config，使用基础默认配置"
+          fi
+
+          # 只有在启用自定义配置时才追加插件
+          if [ "${{ inputs.use_custom_config }}" = "yes" ]; then
+            echo "" >> .config
+            echo "# 自定义插件 - run #${{ github.run_number }}" >> .config
+            
+            [ "${{ inputs.enable_passwall }}"    = "yes" ] && echo "CONFIG_PACKAGE_luci-app-passwall=y"    >> .config
+            [ "${{ inputs.enable_mosdns }}"      = "yes" ] && echo "CONFIG_PACKAGE_luci-app-mosdns=y"      >> .config
+            [ "${{ inputs.enable_qmodem }}"      = "yes" ] && echo "CONFIG_PACKAGE_luci-app-qmodem=y"      >> .config
+            [ "${{ inputs.enable_zerotier }}"    = "yes" ] && { echo "CONFIG_PACKAGE_luci-app-zerotier=y" >> .config; echo "CONFIG_PACKAGE_zerotier=y" >> .config; }
+            [ "${{ inputs.enable_adguardhome }}" = "yes" ] && echo "CONFIG_PACKAGE_luci-app-adguardhome=y" >> .config
+            [ "${{ inputs.enable_openclash }}"   = "yes" ] && echo "CONFIG_PACKAGE_luci-app-openclash=y"   >> .config
+          fi
+
+          make defconfig
+
+          echo "最终 .config 中插件相关配置："
+          grep -E "passwall|mosdns|qmodem|zerotier|adguard|openclash|luci-theme" .config || echo "（无匹配项）"
+
+      - name: Download dependencies
+        working-directory: ./lede
+        run: make download -j$(nproc) || make download -j1 V=s
+
+      - name: Build firmware
+        working-directory: ./lede
+        run: make -j$(nproc) V=s || make -j1 V=s
+
+      - name: Clean temporary files
+        run: rm -rf lede/tmp/* || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LEDE-${{ github.run_number }}-${{ steps.timestamp.outputs.time }}
+          path: lede/bin/targets/**/*
+          retention-days: 7
