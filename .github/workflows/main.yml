@@ -7,8 +7,8 @@ on:
         description: '自定义后台 LAN IP（例如 192.168.5.1 或 10.0.0.1）'
         required: false
         default: '10.0.0.1'
-  #schedule:
-   # - cron: '0 3 * * *' # UTC 3:00 ≈ 北京时间 11:00
+  schedule:
+    - cron: '0 3 * * *' # UTC 3:00 ≈ 北京时间 11:00
   push:
     branches:
       - main
