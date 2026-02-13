@@ -15,6 +15,9 @@ on:
 
 env:
   LAN_IP: ${{ github.event.inputs.lan_ip || '10.0.0.1' }}
+  # ← 这里填你的远程 .config raw URL（必须公开可访问）
+  # 示例：https://raw.githubusercontent.com/xiaojing110/你的仓库名/main/X86/.config
+  REMOTE_CONFIG_URL: "https://github.com/xiaojing110/openwrt-TD/blob/main/X86/.config"   # ← 请替换成真实的 raw 链接！！！
 
 jobs:
   build:
@@ -26,48 +29,68 @@ jobs:
       - name: 检出仓库代码
         uses: actions/checkout@v4
 
-      # 检查并准备 .config 文件（优先根目录 > X86 目录 > 内置默认）
-      - name: 检查并准备 .config 文件
+      # 检查本地 + 远程下载 .config
+      - name: 检查并准备 .config 文件（本地优先，远程补救）
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "开始检查仓库中的 .config 文件（根目录优先）"
+          echo "开始检查 .config 文件（根目录 > X86 > 远程下载 > 内置默认）"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
           mkdir -p lede
 
-          # 显示根目录所有文件（包含隐藏文件）
-          echo "根目录文件列表（包含隐藏文件）："
-          ls -la .. | grep -i -E 'config|X86' || echo "（没有找到相关文件）"
+          # 显示根目录文件（调试）
+          echo "根目录文件列表（grep config/X86）："
+          ls -la .. | grep -i -E 'config|X86|\.config' || echo "（无匹配）"
 
-          echo ""
-          echo "检查根目录 .config："
+          FOUND_LOCAL=false
+
+          # 1. 检查根目录 .config
           if [ -f "../.config" ]; then
             echo "✓ 找到根目录 .config"
             ls -l "../.config"
             cp "../.config" lede/.config
-            echo "已使用根目录的 .config"
+            FOUND_LOCAL=true
           else
             echo "根目录 .config 不存在"
           fi
 
-          # 如果根目录没有，再检查 X86/.config
-          if [ ! -f "lede/.config" ]; then
-            echo ""
-            echo "检查 X86/.config："
+          # 2. 如果没有，再检查 X86/.config
+          if [ ! $FOUND_LOCAL = true ]; then
             if [ -d "../X86" ] && [ -f "../X86/.config" ]; then
               echo "✓ 找到 X86/.config"
               ls -l "../X86/.config"
               cp "../X86/.config" lede/.config
-              echo "已使用 X86 目录的 .config"
+              FOUND_LOCAL=true
             else
-              echo "X86 目录或 X86/.config 不存在"
+              echo "X86/.config 不存在"
             fi
           fi
 
-          # 如果两个位置都没有，使用内置默认配置
-          if [ ! -f "lede/.config" ]; then
-            echo ""
-            echo "⚠️ 仓库中两个位置都没有 .config，使用内置默认配置"
+          # 3. 本地都没有 → 尝试远程下载
+          if [ ! $FOUND_LOCAL = true ]; then
+            if [ -n "${{ env.REMOTE_CONFIG_URL }}" ]; then
+              echo "本地未找到，开始从远程下载 .config..."
+              echo "远程 URL: ${{ env.REMOTE_CONFIG_URL }}"
+              
+              wget -O lede/.config "${{ env.REMOTE_CONFIG_URL }}" || {
+                echo "远程下载失败！请检查 URL 是否正确、可访问。"
+                echo "将使用内置默认配置继续..."
+              }
+              
+              if [ -s lede/.config ]; then
+                echo "✓ 远程 .config 下载成功，大小：$(stat -c %s lede/.config) 字节"
+              else
+                echo "下载的文件为空或失败，改用内置默认"
+                rm -f lede/.config
+              fi
+            else
+              echo "未设置 REMOTE_CONFIG_URL，跳过远程下载"
+            fi
+          fi
+
+          # 4. 最终兜底：内置默认配置
+          if [ ! -f "lede/.config" ] || [ ! -s "lede/.config" ]; then
+            echo "⚠️ 所有来源均未获取有效 .config，使用内置默认配置"
             cat > lede/.config << 'EOF'
           CONFIG_TARGET_x86=y
           CONFIG_TARGET_x86_64=y
@@ -88,8 +111,7 @@ jobs:
           EOF
             echo "已生成内置默认 .config"
           else
-            echo ""
-            echo "成功从仓库复制 .config 文件"
+            echo "成功准备 .config（来源：${FOUND_LOCAL:+本地仓库}${!FOUND_LOCAL:+远程下载})"
           fi
 
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -111,6 +133,7 @@ jobs:
           sudo apt clean
           sudo rm -rf /var/lib/apt/lists/*
 
+      # 以下为原流程其余部分（保持不变）
       - name: 最大化构建空间
         uses: easimon/maximize-build-space@master
         with:
@@ -154,11 +177,11 @@ jobs:
           cd ..
           rm -rf temp-passwall
 
-      #- name: 禁用 grub2 arm-efi 变体（修复 invalid ELF header 错误）
-       # working-directory: ./lede
-      #  run: |
-       #   sed -i '/arm-efi/d' package/boot/grub2/Makefile || true
-       #   sed -i 's/GRUB2_EFI_IMAGES.*arm-efi.*$/GRUB2_EFI_IMAGES := x86_64-efi/' package/boot/grub2/Makefile || true
+      - name: 禁用 grub2 arm-efi 变体
+        working-directory: ./lede
+        run: |
+          sed -i '/arm-efi/d' package/boot/grub2/Makefile || true
+          sed -i 's/GRUB2_EFI_IMAGES.*arm-efi.*$/GRUB2_EFI_IMAGES := x86_64-efi/' package/boot/grub2/Makefile || true
 
       - name: 应用自定义补丁（IP 和主题）
         working-directory: ./lede
@@ -166,24 +189,22 @@ jobs:
           export FULL_IP="${{ env.LAN_IP }}"
           PREFIX_3=$(echo "$FULL_IP" | cut -d. -f1-3).
           PREFIX_2=$(echo "$FULL_IP" | cut -d. -f1-2).
-          PREFIX_1=$(echo "$FULL_IP" | cut -d. -f1).
 
           echo "设置后台 IP 为 $FULL_IP"
-          sed -i "s/192.168.1.1/$FULL_IP/g"         package/base-files/files/bin/config_generate
-          sed -i "s/192.168.1./$PREFIX_3/g"          package/base-files/files/bin/config_generate
-          sed -i "s/192.168./$PREFIX_2/g"            package/base-files/files/bin/config_generate
+          sed -i "s/192.168.1.1/$FULL_IP/g" package/base-files/files/bin/config_generate
+          sed -i "s/192.168.1./$PREFIX_3/g" package/base-files/files/bin/config_generate
+          sed -i "s/192.168./$PREFIX_2/g" package/base-files/files/bin/config_generate
 
-          echo "强制使用 luci-theme-argon 主题"
+          echo "强制使用 luci-theme-argon"
           find feeds/luci/collections/ -type f -name Makefile -exec \
             sed -i -E 's/(luci-theme-)[a-zA-Z0-9_-]+/\1argon/g' {} \;
 
-      - name: 执行 defconfig 并显示配置摘要
+      - name: 执行 defconfig 并显示摘要
         working-directory: ./lede
         run: |
           make defconfig
-          echo ""
-          echo "最终使用的 .config 关键配置项："
-          grep -E "TARGET_|luci|passwall|mosdns|argon|firewall4|xray|v2fly" .config || echo "(没有匹配项)"
+          echo "最终 .config 关键项："
+          grep -E "TARGET_|luci|passwall|mosdns|argon|firewall4" .config || echo "(无匹配)"
 
       - name: 缓存下载文件
         uses: actions/cache@v4
@@ -207,7 +228,7 @@ jobs:
         working-directory: ./lede
         run: make -j$(nproc) V=s || make -j1 V=s
 
-      - name: 生成固件说明文件
+      - name: 生成固件说明
         working-directory: ./lede
         run: |
           mkdir -p bin/targets/x86/64
@@ -218,28 +239,23 @@ jobs:
           编译时间: $(date '+%Y-%m-%d %H:%M:%S %Z')
           后台地址: http://${{ env.LAN_IP }}
           用户名: root
-          密码: 无（首次登录 LuCI 后自行设置）
+          密码: password
 
           仓库: ${{ github.repository }}
           分支: ${{ github.ref_name }}
           运行编号: ${{ github.run_number }}
-          触发方式: ${{ github.event_name }}
 
-          备注：
-          • 主题：Argon
-          • 预装：PassWall + MosDNS
-          • IP：${{ env.LAN_IP }} （可通过手动触发 workflow 自定义）
-
+          备注：PassWall + MosDNS + Argon 主题已包含
           EOF
 
-      - name: 上传构建产物
+      - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
           name: lede-x86_64-${{ github.run_number }}
           path: lede/bin/targets/x86/64/*
           retention-days: 14
 
-      - name: 发布到 GitHub Releases
+      - name: 发布到 Releases
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
@@ -247,5 +263,3 @@ jobs:
           body_path: lede/bin/targets/x86/64/固件说明.txt
           files: |
             lede/bin/targets/x86/64/*
-          draft: false
-          prerelease: false
