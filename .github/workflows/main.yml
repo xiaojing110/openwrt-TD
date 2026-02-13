@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       lan_ip:
-        description: '自定义后台 LAN IP（例如 10.0.0.1）'
+        description: '自定义后台 LAN IP（例如 192.168.5.1 或 10.0.0.1）'
         required: false
         default: '10.0.0.1'
   #schedule:
@@ -13,7 +13,6 @@ on:
     branches:
       - main
 
-# 环境变量：优先使用手动输入的 IP，否则默认 10.0.0.1
 env:
   LAN_IP: ${{ github.event.inputs.lan_ip || '10.0.0.1' }}
 
@@ -21,13 +20,12 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     permissions:
-      contents: write  # 必须，用于发布 Releases
+      contents: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 安装 OpenWrt/LEDE 编译所需系统依赖
       - name: Install build dependencies
         run: |
           sudo apt update -y
@@ -45,7 +43,6 @@ jobs:
           sudo apt clean
           sudo rm -rf /var/lib/apt/lists/*
 
-      # 最大化构建空间
       - name: Maximize build space
         uses: easimon/maximize-build-space@master
         with:
@@ -57,29 +54,25 @@ jobs:
           remove-codeql: 'true'
           remove-docker-images: 'true'
 
-      # 克隆 LEDE 源码
       - name: Clone LEDE source
         run: |
           git clone https://github.com/coolsnowwolf/lede.git
           cd lede
 
-      # 修改 feeds.conf.default（luci 分支、qmodem、mosdns 等）
       - name: Modify feeds.conf.default
         working-directory: ./lede
         run: |
           sed -i '/^src-git luci/c\src-git luci https://github.com/coolsnowwolf/luci.git;openwrt-25.12' feeds.conf.default
-          sed -i 's/^#src-git qmodem/src-git qmodem/' feeds.conf.default
+          sed -i 's/^#src-git qmodem/src-git qmodem/' feeds.conf.default || true
           echo "src-git mosdns https://github.com/sbwml/luci-app-mosdns.git" >> feeds.conf.default
           cat feeds.conf.default
 
-      # 更新并安装 feeds
       - name: Update and install feeds
         working-directory: ./lede
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      # 特殊替换 luci-app-passwall（稀疏检出）
       - name: Replace luci-app-passwall with sparse checkout
         working-directory: ./lede/feeds/luci/applications
         run: |
@@ -92,38 +85,32 @@ jobs:
           mv luci-app-passwall ../../
           cd ..
           rm -rf temp-passwall
-          echo "luci-app-passwall 替换完成"
 
-      # 修复 grub2 编译错误（禁用 arm-efi 变体）
-      - name: Disable grub2 arm-efi variant
+      - name: Disable grub2 arm-efi variant (fix invalid ELF header)
         working-directory: ./lede
         run: |
-          echo "修复 grub2 arm-efi 导致的 invalid ELF header 错误..."
           sed -i '/arm-efi/d' package/boot/grub2/Makefile || true
           sed -i 's/GRUB2_EFI_IMAGES.*arm-efi.*$/GRUB2_EFI_IMAGES := x86_64-efi/' package/boot/grub2/Makefile || true
 
-      # 应用自定义补丁（动态 IP + 主题）
       - name: Apply custom patches
         working-directory: ./lede
         run: |
-          echo "修改默认 IP 为 ${{ env.LAN_IP }}..."
-          sed -i "s/192.168.1.1/${LAN_IP}/g" package/base-files/files/bin/config_generate
-          sed -i "s/192.168.1./${LAN_IP%.*}./g" package/base-files/files/bin/config_generate
-          sed -i "s/192.168./${LAN_IP%.*.*}./g" package/base-files/files/bin/config_generate
+          echo "设置 LAN IP 为 ${{ env.LAN_IP }}"
+          sed -i "s/192.168.1.1/${{ env.LAN_IP }}/g" package/base-files/files/bin/config_generate
+          sed -i "s/192.168.1./${{ env.LAN_IP%.* }}./g" package/base-files/files/bin/config_generate
+          sed -i "s/192.168./${{ env.LAN_IP%.*.* }}./g" package/base-files/files/bin/config_generate
           
-          echo "设置主题为 luci-theme-argon..."
+          echo "强制使用 luci-theme-argon"
           find feeds/luci/collections/ -type f -name Makefile -exec \
             sed -i -E 's/(luci-theme-)[a-zA-Z0-9_-]+/\1argon/g' {} \;
 
-      # 缓存下载文件
       - name: Cache downloads
         uses: actions/cache@v4
         with:
           path: lede/dl
-          key: ${{ runner.os }}-lede-downloads-${{ hashFiles('lede/.config') }}
-          restore-keys: ${{ runner.os }}-lede-downloads-
+          key: ${{ runner.os }}-lede-dl-${{ hashFiles('lede/.config') }}
+          restore-keys: ${{ runner.os }}-lede-dl-
 
-      # 缓存工具链
       - name: Cache toolchain
         uses: actions/cache@v4
         with:
@@ -131,127 +118,107 @@ jobs:
           key: ${{ runner.os }}-lede-toolchain-${{ hashFiles('lede/.config') }}
           restore-keys: ${{ runner.os }}-lede-toolchain-
 
-      # 准备 .config（优先本地文件，否则自动生成）
-      - name: Prepare .config
+      # ────────────────────────────────────────────────
+      # 重点：增强 .config 查找 + 调试输出
+      # ────────────────────────────────────────────────
+      - name: Prepare .config (with debug)
         working-directory: ./lede
         run: |
-          echo "=================== 开始准备 .config ==================="
-          
-          # 优先级1：仓库根目录 .config（推荐）
-          if [ -f ../.config ]; then
-            echo "✓ 使用仓库根目录下的 .config（最高优先级）"
-            cp ../.config ./.config
-          
-          # 优先级2：X86/ 子目录下的 .config
-          elif [ -f ../X86/.config ]; then
-            echo "✓ 使用 ../X86/.config"
-            cp ../X86/.config ./.config
-          
-          # 优先级3：自动生成默认配置
-          else
-            echo "⚠️ 未找到本地 .config，使用内置自动配置（IP 将在补丁中动态设置为 ${{ env.LAN_IP }}）"
+          echo "=== 当前仓库根目录结构（../ 相对于 lede/）==="
+          ls -la .. | grep -E '\.config|X86|x86'
+
+          echo "=== 详细检查可能的 .config 位置 ==="
+          for path in \
+            "../.config" \
+            "../X86/.config" \
+            "../x86/.config" \
+            "../x86_64/.config" \
+            "../X86_64/.config"; do
+            if [ -f "$path" ]; then
+              echo "找到配置文件：$path"
+              cp "$path" ./.config
+              FOUND=1
+              break
+            else
+              echo "未找到：$path"
+            fi
+          done
+
+          if [ -z "$FOUND" ]; then
+            echo "所有常见位置均未找到 .config，使用内置默认配置"
             cat > .config << 'EOF'
           CONFIG_TARGET_x86=y
           CONFIG_TARGET_x86_64=y
           CONFIG_TARGET_x86_64_DEVICE_generic=y
-          
+
           CONFIG_PACKAGE_luci=y
           CONFIG_PACKAGE_luci-theme-argon=y
-          
+
           CONFIG_PACKAGE_luci-app-passwall=y
           CONFIG_PACKAGE_luci-app-mosdns=y
-          
+
           CONFIG_PACKAGE_firewall4=y
           CONFIG_PACKAGE_nftables=y
           CONFIG_PACKAGE_kmod-nft-core=y
-          
+
           CONFIG_CLEAN_IPKG=y
           CONFIG_BUILDBOT=y
-          
-          # 可选插件（按需取消注释）
-          # CONFIG_PACKAGE_luci-app-qmodem=y
-          # CONFIG_PACKAGE_xray-core=y
-          # CONFIG_PACKAGE_v2fly-geoip=y
-          # CONFIG_PACKAGE_v2fly-geosite=y
           EOF
-          echo "已生成内置默认 .config"
           fi
-          
-          echo "执行 make defconfig ..."
-          make defconfig
-          
-          echo "=================== 当前 .config 关键项检查 ==================="
-          grep -E "TARGET_x86|luci|passwall|mosdns|argon|firewall4|qmodem|xray|v2fly" .config || echo "（未匹配到关键词）"
-          echo "================================================================="
 
-      # 下载依赖包
+          echo "执行 defconfig..."
+          make defconfig
+
+          echo "=== .config 关键内容预览 ==="
+          grep -E "TARGET_|luci|passwall|mosdns|argon|firewall4" .config || echo "(无匹配项)"
+          echo "====================================="
+
       - name: Download dependencies
         working-directory: ./lede
-        run: |
-          make download -j$(nproc) || make download -j1 V=s
+        run: make download -j$(nproc) || make download -j1 V=s
 
-      # 编译固件
       - name: Build firmware
         working-directory: ./lede
-        run: |
-          make -j$(nproc) V=s || make -j1 V=s
+        run: make -j$(nproc) V=s || make -j1 V=s
 
-      # 生成固件说明文件（包含所有关键信息）
-      - name: Generate firmware info
+      - name: Generate firmware info file
         working-directory: ./lede
         run: |
-          echo "生成固件说明文件（固件名字、编译时间、后台IP、账户密码等）..."
           mkdir -p bin/targets/x86/64
           cat > bin/targets/x86/64/固件说明.txt << EOF
           ==================== LEDE 固件信息 ====================
-          
-          固件名称: LEDE x86_64 Generic (coolsnowwolf/lede)
-          编译时间: $(date '+%Y-%m-%d %H:%M:%S UTC')
-          后台访问地址: http://${{ env.LAN_IP }}
-          默认用户名: root
-          默认密码: 无（首次登录后在 LuCI 设置密码）
-          
-          构建来源: ${{ github.repository }} (${{ github.ref_name }})
-          构建编号: ${{ github.run_number }}
-          构建触发方式: ${{ github.event_name }}
-          
-          ====================================================
-          提示：
-          1. 首次登录请直接访问 http://${{ env.LAN_IP }}，设置密码
-          2. PassWall / MosDNS 等插件已预装
-          3. 如需更多插件，可在 LuCI 中安装
+
+          固件目标: x86_64 generic
+          编译时间: $(date '+%Y-%m-%d %H:%M:%S %Z')
+          后台地址: http://${{ env.LAN_IP }}
+          用户名: root
+          密码: 无（首次登录 LuCI 后自行设置）
+
+          仓库: ${{ github.repository }}
+          分支: ${{ github.ref_name }}
+          运行编号: ${{ github.run_number }}
+          触发方式: ${{ github.event_name }}
+
+          备注：
+          • 主题：Argon
+          • 预装：PassWall + MosDNS
+          • 如需修改 IP，可重新触发 workflow 并输入新 IP
+
           EOF
-          echo "固件说明文件生成完成"
 
-      # 清理临时文件
-      - name: Clean temporary files
-        run: |
-          rm -rf lede/tmp/* || true
-
-      # 整理并上传到 Artifacts（供下载）
-      - name: Organize and upload artifacts
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LEDE-firmware-x86_64-${{ github.run_number }}
-          path: |
-            lede/bin/targets/x86/64/*
+          name: lede-x86_64-${{ github.run_number }}
+          path: lede/bin/targets/x86/64/*
           retention-days: 14
 
-      # 发布到 GitHub Releases
-      - name: Release to GitHub Releases
+      - name: Release to GitHub
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: lede-${{ github.run_number }}
-          name: LEDE x86_64 ${{ format('{0,date,yyyy-MM-dd}') }} Build #${{ github.run_number }}
-          body: |
-            **自动编译的 LEDE 固件**
-            
-            - **后台 IP**：`${{ env.LAN_IP }}`
-            - **用户名**：`root`
-            - **密码**：首次登录设置（无默认密码）
-            - **编译时间**：`$(date '+%Y-%m-%d %H:%M:%S')`
-            
-            完整信息请查看附件中的 **固件说明.txt**
+          tag_name: build-${{ github.run_number }}
+          name: LEDE x86_64 - ${{ env.LAN_IP }} - ${{ github.run_number }}
+          body_path: lede/bin/targets/x86/64/固件说明.txt
           files: |
             lede/bin/targets/x86/64/*
           draft: false
