@@ -7,8 +7,8 @@ on:
         description: '自定义后台 LAN IP（例如 192.168.5.1 或 10.0.0.1）'
         required: false
         default: '10.0.0.1'
-  #schedule:
-   # - cron: '0 3 * * *' # UTC 3:00 ≈ 北京时间 11:00
+  schedule:
+   # - cron: '0 3 * * *'
   push:
     branches:
       - main
@@ -65,7 +65,6 @@ jobs:
           sed -i '/^src-git luci/c\src-git luci https://github.com/coolsnowwolf/luci.git;openwrt-25.12' feeds.conf.default
           sed -i 's/^#src-git qmodem/src-git qmodem/' feeds.conf.default || true
           echo "src-git mosdns https://github.com/sbwml/luci-app-mosdns.git" >> feeds.conf.default
-          cat feeds.conf.default
 
       - name: Update and install feeds
         working-directory: ./lede
@@ -86,50 +85,39 @@ jobs:
           cd ..
           rm -rf temp-passwall
 
-      - name: Disable grub2 arm-efi variant (fix invalid ELF header)
+      - name: Disable grub2 arm-efi variant
         working-directory: ./lede
         run: |
           sed -i '/arm-efi/d' package/boot/grub2/Makefile || true
           sed -i 's/GRUB2_EFI_IMAGES.*arm-efi.*$/GRUB2_EFI_IMAGES := x86_64-efi/' package/boot/grub2/Makefile || true
 
-      # ────────────────────────────────────────────────
-      # 修正点：把 IP 切分逻辑放到 shell 里执行
-      # ────────────────────────────────────────────────
       - name: Apply custom patches (IP & theme)
         working-directory: ./lede
         run: |
-          # 先把 LAN_IP 存到环境变量（shell 可见）
           export FULL_IP="${{ env.LAN_IP }}"
-
-          # 计算三个常用前缀（192.168.1.1 → 192.168.1. / 192.168. / 192.）
           PREFIX_3=$(echo "$FULL_IP" | cut -d. -f1-3).
           PREFIX_2=$(echo "$FULL_IP" | cut -d. -f1-2).
           PREFIX_1=$(echo "$FULL_IP" | cut -d. -f1).
 
           echo "设置 LAN IP 为 $FULL_IP"
-          echo "计算得到的前缀："
-          echo "  三段: $PREFIX_3"
-          echo "  二段: $PREFIX_2"
-          echo "  一段: $PREFIX_1"
-
-          # 替换 config_generate 中的 IP 相关部分
           sed -i "s/192.168.1.1/$FULL_IP/g"         package/base-files/files/bin/config_generate
           sed -i "s/192.168.1./$PREFIX_3/g"          package/base-files/files/bin/config_generate
           sed -i "s/192.168./$PREFIX_2/g"            package/base-files/files/bin/config_generate
-          # 如果你的 config_generate 里还有更短的前缀（如 192.），可加下面这行
-          # sed -i "s/192./$PREFIX_1/g"              package/base-files/files/bin/config_generate
 
           echo "强制使用 luci-theme-argon"
           find feeds/luci/collections/ -type f -name Makefile -exec \
             sed -i -E 's/(luci-theme-)[a-zA-Z0-9_-]+/\1argon/g' {} \;
 
-      - name: Prepare .config (with debug)
+      - name: Prepare .config with detailed debug
         working-directory: ./lede
         run: |
-          echo "=== 当前仓库根目录结构（../ 相对于 lede/）==="
-          ls -la .. | grep -E '\.config|X86|x86' || echo "无匹配"
+          echo "=== 仓库根目录完整文件列表（应该能看到 .config 和 X86） ==="
+          ls -la ..
 
-          echo "=== 检查可能的 .config 位置 ==="
+          echo "=== 只显示隐藏文件和目录名含 x/X 的 ==="
+          ls -la .. | grep -i -E '^\.|x86|X86|config'
+
+          echo "=== 逐个检查配置文件位置 ==="
           FOUND=""
           for path in \
             "../.config" \
@@ -137,18 +125,19 @@ jobs:
             "../x86/.config" \
             "../x86_64/.config" \
             "../X86_64/.config"; do
+            echo "检查: $path"
             if [ -f "$path" ]; then
-              echo "找到：$path → 复制到 ./.config"
+              echo "→ 存在！复制到 ./lede/.config"
               cp "$path" ./.config
               FOUND=1
               break
             else
-              echo "未找到：$path"
+              echo "→ 不存在"
             fi
           done
 
           if [ -z "$FOUND" ]; then
-            echo "未找到任何 .config，使用内置默认配置"
+            echo "所有位置均未找到 .config，使用内置默认配置"
             cat > .config << 'EOF'
           CONFIG_TARGET_x86=y
           CONFIG_TARGET_x86_64=y
@@ -167,12 +156,15 @@ jobs:
           CONFIG_CLEAN_IPKG=y
           CONFIG_BUILDBOT=y
           EOF
+          else
+            echo "成功使用仓库中的 .config"
           fi
 
+          echo "执行 make defconfig"
           make defconfig
 
-          echo "=== .config 关键项 ==="
-          grep -E "TARGET_|luci|passwall|mosdns|argon|firewall4" .config || echo "(无匹配)"
+          echo "=== 最终使用的 .config 关键内容预览 ==="
+          grep -E "TARGET_|luci|passwall|mosdns|argon|firewall4|xray|v2ray" .config || echo "无匹配项"
 
       - name: Cache downloads
         uses: actions/cache@v4
@@ -196,29 +188,19 @@ jobs:
         working-directory: ./lede
         run: make -j$(nproc) V=s || make -j1 V=s
 
-      - name: Generate firmware info file
+      - name: Generate firmware info
         working-directory: ./lede
         run: |
           mkdir -p bin/targets/x86/64
           cat > bin/targets/x86/64/固件说明.txt << EOF
-          ==================== LEDE 固件信息 ====================
-
-          固件目标: x86_64 generic
+          LEDE x86_64 固件信息
           编译时间: $(date '+%Y-%m-%d %H:%M:%S %Z')
           后台地址: http://${{ env.LAN_IP }}
           用户名: root
-          密码: password（首次登录 LuCI 后自行设置）
-
+          密码: password
           仓库: ${{ github.repository }}
           分支: ${{ github.ref_name }}
           运行编号: ${{ github.run_number }}
-          触发方式: ${{ github.event_name }}
-
-          备注：
-          • 主题：Argon
-          • 预装：PassWall + MosDNS
-          • IP：${{ env.LAN_IP }} （自定义输入）
-
           EOF
 
       - name: Upload artifact
@@ -234,7 +216,4 @@ jobs:
           tag_name: build-${{ github.run_number }}
           name: LEDE x86_64 - ${{ env.LAN_IP }} - ${{ github.run_number }}
           body_path: lede/bin/targets/x86/64/固件说明.txt
-          files: |
-            lede/bin/targets/x86/64/*
-          draft: false
-          prerelease: false
+          files: lede/bin/targets/x86/64/*
