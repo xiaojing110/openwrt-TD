@@ -8,7 +8,7 @@ on:
         required: false
         default: '10.0.0.1'
   schedule:
-   # - cron: '0 3 * * *'
+    - cron: '0 3 * * *'
   push:
     branches:
       - main
@@ -197,7 +197,7 @@ jobs:
           编译时间: $(date '+%Y-%m-%d %H:%M:%S %Z')
           后台地址: http://${{ env.LAN_IP }}
           用户名: root
-          密码: password
+          密码: 首次登录设置
           仓库: ${{ github.repository }}
           分支: ${{ github.ref_name }}
           运行编号: ${{ github.run_number }}
