@@ -1,10 +1,10 @@
-name: 构建 LEDE / ImmortalWrt 固件
+name: 构建 LEDE / ImmortalWrt 固件（Thatdream）
 
 on:
   workflow_dispatch:
     inputs:
       source:
-        description: '选择编译源码'
+        description: '选择源码（lede 或 immortalwrt）'
         required: true
         default: 'lede'
         type: choice
@@ -13,29 +13,31 @@ on:
           - immortalwrt
 
       lan_ip:
-        description: '后台 LAN IP'
+        description: '自定义后台 LAN IP（例如 192.168.5.1 或 10.0.0.1）'
         required: false
         default: '10.0.0.1'
 
       config_url:
-        description: '自定义 .config 地址'
+        description: '自定义 .config 地址（填写则优先使用此配置文件）'
         required: false
         default: ''
 
       diy_url:
-        description: '远程 diy.sh'
+        description: '远程 diy.sh 地址（可留空，默认执行本仓库 diy.sh）'
         required: false
         default: ''
 
       enable_mtk_patch:
-        description: '启用 MTK MT7987 头文件补丁'
+        description: '启用 MTK MT7987 头文件补丁下载（适用于 MTK 机型）'
         required: false
         default: 'false'
         type: choice
-        options: [ 'false', 'true' ]
+        options:
+          - 'false'
+          - 'true'
 
       mtk_kernel_mode:
-        description: 'MTK 内核编译模式'
+        description: 'MTK 内核编译模式（仅 mediatek 生效）'
         required: false
         default: 'dual'
         type: choice
@@ -46,12 +48,12 @@ on:
 
 env:
   TZ: Asia/Shanghai
-  LAN_IP: ${{ github.event.inputs.lan_ip }}
-  SOURCE: ${{ github.event.inputs.source }}
-  CONFIG_URL: ${{ github.event.inputs.config_url }}
-  DIY_URL: ${{ github.event.inputs.diy_url }}
-  ENABLE_MTK_PATCH: ${{ github.event.inputs.enable_mtk_patch }}
-  MTK_KERNEL_MODE: ${{ github.event.inputs.mtk_kernel_mode }}
+  LAN_IP: ${{ github.event.inputs.lan_ip || '10.0.0.1' }}
+  SOURCE: ${{ github.event.inputs.source || 'lede' }}
+  CONFIG_URL: ${{ github.event.inputs.config_url || '' }}
+  DIY_URL: ${{ github.event.inputs.diy_url || '' }}
+  ENABLE_MTK_PATCH: ${{ github.event.inputs.enable_mtk_patch || 'false' }}
+  MTK_KERNEL_MODE: ${{ github.event.inputs.mtk_kernel_mode || 'dual' }}
 
 jobs:
   build:
@@ -60,86 +62,272 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - name: 检出仓库代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
-      - name: 设置时间
-        run: sudo timedatectl set-timezone "$TZ"
-
-      - name: 安装依赖
+      - name: 设置时区
         run: |
-          sudo apt update
-          sudo apt install -y build-essential clang flex bison g++ gawk \
-          gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev \
-          python3 python3-distutils rsync unzip zlib1g-dev file wget zip
+          sudo timedatectl set-timezone "${TZ}"
 
-      - name: 克隆源码
+      - name: 安装编译依赖
         run: |
-          if [ "$SOURCE" = "immortalwrt" ]; then
+          sudo apt update -y
+          sudo apt full-upgrade -y
+          sudo apt install -y \
+            ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
+            bzip2 ccache clang cmake cpio curl device-tree-compiler flex gawk gcc-multilib \
+            g++-multilib gettext genisoimage git gperf haveged help2man intltool \
+            libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev \
+            libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev \
+            libreadline-dev libssl-dev libtool llvm lrzsz libnsl-dev ninja-build p7zip \
+            p7zip-full patch pkgconf python3 python3-pyelftools python3-setuptools \
+            qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs \
+            upx-ucl unzip vim wget xmlto xxd zlib1g-dev zip
+          sudo apt clean
+          sudo rm -rf /var/lib/apt/lists/*
+
+      - name: 最大化构建空间
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 512
+          swap-size-mb: 1024
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+
+      - name: 克隆源码（lede / immortalwrt）
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "选择源码：${{ env.SOURCE }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          if [ "${{ env.SOURCE }}" = "immortalwrt" ]; then
             git clone https://github.com/immortalwrt/immortalwrt.git lede
           else
             git clone https://github.com/coolsnowwolf/lede.git lede
           fi
 
-      - name: 执行 diy.sh
-        working-directory: lede
+      - name: 执行 diy.sh（支持远程调用，默认执行本仓库）
+        working-directory: ./lede
         run: |
-          if [ -n "$DIY_URL" ]; then
-            wget -O /tmp/diy.sh "$DIY_URL"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "开始处理 diy.sh..."
+          echo "DIY_URL: ${{ env.DIY_URL }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          if [ -n "${{ env.DIY_URL }}" ]; then
+            echo "✔ 检测到远程 diy.sh，开始下载执行..."
+            wget -O /tmp/diy.sh "${{ env.DIY_URL }}" || {
+              echo "❌ 远程 diy.sh 下载失败"
+              exit 1
+            }
+            chmod +x /tmp/diy.sh
             bash /tmp/diy.sh
-          elif [ -f ../diy.sh ]; then
-            bash ../diy.sh
+            echo "✔ 远程 diy.sh 执行完成"
+          else
+            echo "未输入 diy_url，尝试执行本仓库 diy.sh..."
+            if [ -f "../diy.sh" ]; then
+              chmod +x ../diy.sh
+              bash ../diy.sh
+              echo "✔ 本仓库 diy.sh 执行完成"
+            else
+              echo "⚠️ 本仓库不存在 diy.sh，跳过"
+            fi
           fi
 
-      - name: 更新 feeds
-        working-directory: lede
+      - name: 更新并安装 feeds
+        working-directory: ./lede
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a -f
 
-      - name: 加载 .config
+      - name: 加载 .config（优先 config_url）
         run: |
-          if [ -n "$CONFIG_URL" ]; then
-            wget -O lede/.config "$CONFIG_URL"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "开始加载 .config..."
+          echo "CONFIG_URL: ${{ env.CONFIG_URL }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          if [ -n "${{ env.CONFIG_URL }}" ]; then
+            echo "✔ 使用自定义 config_url 下载..."
+            wget -O lede/.config "${{ env.CONFIG_URL }}" || {
+              echo "❌ config_url 下载失败"
+              exit 1
+            }
           else
-            cp .config lede/.config || true
+            echo "未设置 config_url，尝试使用仓库根目录 .config..."
+            if [ -f ".config" ]; then
+              cp -fv ".config" lede/.config
+            elif [ -f "X86/.config" ]; then
+              cp -fv "X86/.config" lede/.config
+            elif [ -f "X86/X86.config" ]; then
+              cp -fv "X86/X86.config" lede/.config
+            else
+              echo "❌ 仓库中未找到 .config，且未提供 config_url"
+              exit 1
+            fi
           fi
 
-      - name: defconfig
-        working-directory: lede
-        run: make defconfig
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "最终 .config 前 30 行预览："
+          head -n 30 lede/.config || true
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-      - name: 判断是否 MTK
-        id: detect
-        working-directory: lede
+      - name: 执行 defconfig
+        working-directory: ./lede
         run: |
-          if grep -q CONFIG_TARGET_mediatek=y .config; then
+          make defconfig
+
+      - name: 检测是否 mediatek 平台
+        working-directory: ./lede
+        run: |
+          if grep -q "CONFIG_TARGET_mediatek=y" .config; then
             echo "IS_MTK=true" >> $GITHUB_ENV
+            echo "✔ 当前目标为 mediatek"
           else
             echo "IS_MTK=false" >> $GITHUB_ENV
+            echo "⚠️ 当前目标非 mediatek"
           fi
 
-      # ========= MTK 编译函数 =========
-      - name: MTK 编译
-        if: env.IS_MTK == 'true'
-        working-directory: lede
+      - name: 应用补丁（LAN IP + Argon + 可选 MTK 头文件补丁）
+        working-directory: ./lede
         run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "开始应用补丁..."
+          echo "LAN_IP: ${{ env.LAN_IP }}"
+          echo "ENABLE_MTK_PATCH: ${{ env.ENABLE_MTK_PATCH }}"
+          echo "IS_MTK: ${{ env.IS_MTK }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          export FULL_IP="${{ env.LAN_IP }}"
+          PREFIX_3=$(echo "$FULL_IP" | cut -d. -f1-3).
+          PREFIX_2=$(echo "$FULL_IP" | cut -d. -f1-2).
+
+          sed -i "s/192.168.1.1/$FULL_IP/g" package/base-files/files/bin/config_generate
+          sed -i "s/192.168.1./$PREFIX_3/g" package/base-files/files/bin/config_generate
+          sed -i "s/192.168./$PREFIX_2/g" package/base-files/files/bin/config_generate
+          sed -i "s/192\.168\.1\.[0-9]\+/$FULL_IP/g" package/base-files/files/bin/config_generate
+
+          # 强制 Argon
+          find feeds/luci/collections/ -type f -name Makefile -exec \
+            sed -i -E 's/(luci-theme-)[a-zA-Z0-9_-]+/\1argon/g' {} \;
+
+          # 非 mediatek 自动跳过
+          if [ "${{ env.IS_MTK }}" != "true" ]; then
+            echo "⚠️ 非 mediatek，跳过 MTK 补丁下载"
+            exit 0
+          fi
+
+          # mediatek 下启用补丁开关
+          if [ "${{ env.ENABLE_MTK_PATCH }}" = "true" ]; then
+            echo "✔ 启用 MTK MT7987 头文件补丁下载..."
+
+            BASE_DIR="target/linux/mediatek"
+
+            if [ ! -d "$BASE_DIR" ]; then
+              echo "⚠️ 当前源码无 mediatek 目录，跳过"
+              exit 0
+            fi
+
+            FILES_LIST=$(ls -d ${BASE_DIR}/files-* 2>/dev/null | sort -V)
+
+            if [ -z "$FILES_LIST" ]; then
+              echo "❌ 未检测到 files-* 目录，无法写入补丁"
+              exit 1
+            fi
+
+            echo "检测到以下 files 目录："
+            echo "$FILES_LIST"
+
+            for FILES_DIR in $FILES_LIST; do
+              echo "---------------------------------------------------"
+              echo "写入补丁到：$FILES_DIR"
+
+              RESET_DIR="${FILES_DIR}/include/dt-bindings/reset"
+              CLOCK_DIR="${FILES_DIR}/include/dt-bindings/clock"
+
+              mkdir -p "$RESET_DIR"
+              mkdir -p "$CLOCK_DIR"
+
+              wget -q -O "$RESET_DIR/mediatek,mt7987-resets.h" \
+                "https://raw.githubusercontent.com/padavanonly/immortalwrt-mt798x-6.6/b3f543825e91bdb5fb266c7d56f7f49b90fd7a54/target/linux/mediatek/files-6.6/include/dt-bindings/reset/mediatek%2Cmt7987-resets.h" || {
+                  echo "❌ reset 头文件下载失败"
+                  exit 1
+                }
+
+              wget -q -O "$CLOCK_DIR/mediatek,mt7987-clk.h" \
+                "https://raw.githubusercontent.com/u-boot/u-boot/master/include/dt-bindings/clock/mediatek%2Cmt7987-clk.h" || {
+                  echo "❌ clock 头文件下载失败"
+                  exit 1
+                }
+
+              echo "✔ 已写入：$FILES_DIR"
+            done
+
+            echo "✔ MTK 补丁同步完成"
+          else
+            echo "⚠️ 未启用 MTK 补丁下载，跳过"
+          fi
+
+      - name: 编译函数（普通/MTK共用）
+        run: |
+          cat > build_func.sh << 'EOF'
           build_kernel() {
             ver=$1
-            sed -i "s/^KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:=$ver/" \
-              target/linux/mediatek/Makefile
-            make defconfig
-            make download -j$(nproc)
-            make -j$(nproc)
-            mkdir -p ../output/kernel-$ver
-            cp -r bin/* ../output/kernel-$ver/
-          }
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "开始编译 mediatek 内核版本: $ver"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-          case "$MTK_KERNEL_MODE" in
+            sed -i "s/^KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:=$ver/" target/linux/mediatek/Makefile || true
+            grep "KERNEL_PATCHVER" target/linux/mediatek/Makefile || true
+
+            make defconfig
+            make download -j$(nproc) || make download -j1 V=s
+            make -j$(nproc) V=s || make -j1 V=s
+
+            mkdir -p ../output/kernel-$ver
+            cp -rf bin/* ../output/kernel-$ver/ || true
+          }
+          EOF
+
+      - name: 普通平台编译（非 mediatek）
+        if: env.IS_MTK == 'false'
+        working-directory: ./lede
+        run: |
+          make download -j$(nproc) || make download -j1 V=s
+          make -j$(nproc) V=s || make -j1 V=s
+
+          mkdir -p ../output/normal
+          cp -rf bin/* ../output/normal/ || true
+
+      - name: MTK 编译（支持 dual / only_6_12 / only_6_6）
+        if: env.IS_MTK == 'true'
+        working-directory: ./lede
+        run: |
+          source ../build_func.sh
+
+          if [ ! -f "target/linux/mediatek/Makefile" ]; then
+            echo "❌ 找不到 target/linux/mediatek/Makefile"
+            exit 1
+          fi
+
+          case "${{ env.MTK_KERNEL_MODE }}" in
             dual)
               build_kernel 6.6
+
+              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+              echo "开始清理环境，为 6.12 编译准备..."
+              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
               make dirclean
+
               ./scripts/feeds update -a
               ./scripts/feeds install -a -f
+              cp -fv .config .config.bak || true
+
               build_kernel 6.12
               ;;
             only_6_12)
@@ -148,45 +336,97 @@ jobs:
             only_6_6)
               build_kernel 6.6
               ;;
+            *)
+              echo "❌ 未知 MTK_KERNEL_MODE: ${{ env.MTK_KERNEL_MODE }}"
+              exit 1
+              ;;
           esac
 
-      - name: 普通平台编译
-        if: env.IS_MTK == 'false'
-        working-directory: lede
+      - name: 打包 packages 为 zip（保留固件原文件）
         run: |
-          make download -j$(nproc)
-          make -j$(nproc)
-          mkdir -p ../output/normal
-          cp -r bin/* ../output/normal/
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "开始打包 packages..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-      - name: 打包 packages
-        run: |
           cd output
-          for d in */packages; do
-            zip -r "$(basename $(dirname $d))-packages.zip" "$d"
+
+          find . -type d -name "packages" | while read p; do
+            parent=$(basename "$(dirname "$p")")
+            zipname="${parent}-packages.zip"
+            echo "打包: $p -> $zipname"
+            zip -r "$zipname" "$p"/*
           done
 
-      - name: 生成 Release 说明
+          echo "打包完成，output 文件如下："
+          ls -la
+
+      - name: 生成 Release 名称与说明
         run: |
           DATE=$(date '+%y%m%d')
-          NAME=$(echo "$SOURCE" | tr a-z A-Z)
-          echo "$NAME-Thatdream-$DATE" > release_name.txt
+          SOURCE_UPPER=$(echo "${{ env.SOURCE }}" | tr a-z A-Z)
+
+          # 读取固件目标
+          BOARD=$(grep -E "^CONFIG_TARGET_BOARD=" lede/.config | cut -d'"' -f2)
+          SUBTARGET=$(grep -E "^CONFIG_TARGET_SUBTARGET=" lede/.config | cut -d'"' -f2)
+          PROFILE=$(grep -E "^CONFIG_TARGET_PROFILE=" lede/.config | cut -d'"' -f2)
+
+          if [ -z "$BOARD" ]; then BOARD="未知"; fi
+          if [ -z "$SUBTARGET" ]; then SUBTARGET="未知"; fi
+
+          TARGET="$BOARD/$SUBTARGET"
+          if [ -n "$PROFILE" ]; then
+            TARGET="$TARGET ($PROFILE)"
+          fi
+
+          # 配置来源
+          if [ -n "${{ env.CONFIG_URL }}" ]; then
+            CONFIG_SRC="${{ env.CONFIG_URL }}"
+          else
+            CONFIG_SRC="仓库内 .config / X86/.config / X86/X86.config"
+          fi
+
+          # 源代码来源
+          if [ "${{ env.SOURCE }}" = "immortalwrt" ]; then
+            SOURCE_URL="https://github.com/immortalwrt/immortalwrt"
+          else
+            SOURCE_URL="https://github.com/coolsnowwolf/lede"
+          fi
+
+          RELEASE_NAME="${SOURCE_UPPER}-Thatdream-${DATE}"
+
+          echo "RELEASE_NAME=$RELEASE_NAME" >> $GITHUB_ENV
 
           cat > release_note.txt << EOF
-固件目标: $FIRMWARE_TYPE
+固件目标: $TARGET
 编译时间: $(date '+%Y-%m-%d %H:%M:%S')
-后台地址: http://$LAN_IP
+后台地址: http://${{ env.LAN_IP }}
 用户名: root
 密码: password
-已预装 PassWall + MosDNS + Argon 主题
-源代码来源: $SOURCE
-配置来源: ${CONFIG_URL:-仓库/默认}
+备注：已预装 PassWall + MosDNS + Argon 主题
+源代码来源：$SOURCE_URL
+配置来源: $CONFIG_SRC
 EOF
 
-      - name: 发布 Release
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Release Name: $RELEASE_NAME"
+          echo "Release Note:"
+          cat release_note.txt
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+      - name: 上传构建产物（Artifacts）
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ env.SOURCE }}-${{ github.run_number }}
+          path: output/**
+          retention-days: 14
+
+      - name: 发布到 GitHub Releases（固件保留 + packages zip）
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          name: ${{ steps.name.outputs.name }}
+          name: ${{ env.RELEASE_NAME }}
           body_path: release_note.txt
-          files: output/**/*
+          files: |
+            output/**/*
+          draft: false
+          prerelease: false
