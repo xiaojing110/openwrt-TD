@@ -1,4 +1,4 @@
-name: 构建 LEDE / ImmortalWrt 固件
+name: 构建 LEDE / ImmortalWrt 固件（智能双内核）
 
 on:
   workflow_dispatch:
@@ -22,6 +22,11 @@ on:
         required: false
         default: ''
 
+      diy_url:
+        description: '远程 diy.sh 地址（可留空，默认执行本仓库 diy.sh）'
+        required: false
+        default: ''
+
       enable_mtk_patch:
         description: '启用 MTK MT7987 头文件补丁下载（适用于 MTK 机型）'
         required: false
@@ -30,22 +35,16 @@ on:
         options:
           - 'false'
           - 'true'
-  #schedule:
-    #- cron: '0 3 * * *'   # UTC 3:00 ≈ 北京时间 11:00 定时编译，默认关闭
 
- # push:
-  #  branches:
-   #   - main
 env:
   TZ: Asia/Shanghai
 
-  # 远程默认 config（当仓库无配置、且未输入 config_url 时使用）
   REMOTE_CONFIG_URL: "https://raw.githubusercontent.com/xiaojing110/openwrt-TD/main/X86/.config"
 
-  # 输入参数映射
   LAN_IP: ${{ github.event.inputs.lan_ip || '10.0.0.1' }}
   SOURCE: ${{ github.event.inputs.source || 'lede' }}
   CONFIG_URL: ${{ github.event.inputs.config_url || '' }}
+  DIY_URL: ${{ github.event.inputs.diy_url || '' }}
   ENABLE_MTK_PATCH: ${{ github.event.inputs.enable_mtk_patch || 'false' }}
 
 jobs:
@@ -60,31 +59,6 @@ jobs:
         with:
           ref: main
           fetch-depth: 1
-
-      - name: 显示仓库文件结构（调试必备）
-        run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "当前目录："
-          pwd
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "根目录文件："
-          ls -la
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "X86 目录文件："
-          ls -la X86 || echo "⚠️ X86 文件夹不存在"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "查找 config 文件："
-          find . -maxdepth 3 -type f \( -name ".config" -o -name "*.config" \) || true
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "Git 状态："
-          git status || true
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "当前分支："
-          git branch -a || true
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "当前 commit："
-          git log -1 --oneline || true
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
       - name: 设置时区
         run: |
@@ -103,7 +77,7 @@ jobs:
             libreadline-dev libssl-dev libtool llvm lrzsz libnsl-dev ninja-build p7zip \
             p7zip-full patch pkgconf python3 python3-pyelftools python3-setuptools \
             qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs \
-            upx-ucl unzip vim wget xmlto xxd zlib1g-dev
+            upx-ucl unzip vim wget xmlto xxd zlib1g-dev zip
           sudo apt clean
           sudo rm -rf /var/lib/apt/lists/*
 
@@ -138,20 +112,37 @@ jobs:
           sed -i 's/^#src-git qmodem/src-git qmodem/' feeds.conf.default || true
           echo "src-git mosdns https://github.com/sbwml/luci-app-mosdns.git" >> feeds.conf.default || true
 
-      - name: 执行 diy.sh（feeds 更新前执行）
+      - name: 执行 diy.sh（支持远程调用）
         working-directory: ./lede
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "检查是否存在 diy.sh..."
+          echo "开始处理 diy.sh..."
+          echo "DIY_URL: ${{ env.DIY_URL }}"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-          if [ -f "../diy.sh" ]; then
-            echo "✔ 找到仓库根目录 diy.sh，开始执行..."
-            chmod +x ../diy.sh
-            bash ../diy.sh
-            echo "✔ diy.sh 执行完成"
+          if [ -n "${{ env.DIY_URL }}" ]; then
+            echo "✔ 检测到远程 diy.sh 地址，优先下载执行..."
+
+            wget -O /tmp/diy.sh "${{ env.DIY_URL }}" || {
+              echo "❌ 远程 diy.sh 下载失败"
+              exit 1
+            }
+
+            chmod +x /tmp/diy.sh
+            bash /tmp/diy.sh
+            echo "✔ 远程 diy.sh 执行完成"
+
           else
-            echo "⚠️ 未找到 diy.sh，跳过"
+            echo "未输入 diy_url，尝试执行本仓库 diy.sh..."
+
+            if [ -f "../diy.sh" ]; then
+              echo "✔ 找到本仓库 diy.sh，开始执行..."
+              chmod +x ../diy.sh
+              bash ../diy.sh
+              echo "✔ 本仓库 diy.sh 执行完成"
+            else
+              echo "⚠️ 本仓库不存在 diy.sh，跳过"
+            fi
           fi
 
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -170,7 +161,6 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "开始加载 .config..."
           echo "CONFIG_URL: ${{ env.CONFIG_URL }}"
-          echo "默认 REMOTE_CONFIG_URL: ${{ env.REMOTE_CONFIG_URL }}"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
           FOUND_CONFIG=""
@@ -181,12 +171,10 @@ jobs:
               echo "❌ 自定义 config_url 下载失败"
               exit 1
             }
-
             if [ ! -s "lede/.config" ]; then
               echo "❌ 下载成功但文件为空"
               exit 1
             fi
-
             echo "✔ 自定义 .config 下载成功"
           else
             echo "未输入 config_url，开始查找仓库配置文件..."
@@ -204,37 +192,27 @@ jobs:
               cp -fv "$FOUND_CONFIG" lede/.config
             else
               echo "⚠️ 仓库内未找到任何 .config，使用默认 raw 下载..."
-
               wget -O lede/.config "${{ env.REMOTE_CONFIG_URL }}" || {
-                echo "❌ raw 下载失败，请检查 URL 是否正确"
+                echo "❌ raw 下载失败"
                 exit 1
               }
-
               if [ ! -s "lede/.config" ]; then
                 echo "❌ 下载成功但文件为空"
                 exit 1
               fi
-
               echo "✔ raw 下载成功"
             fi
           fi
 
-          echo ""
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "最终 lede/.config 文件信息："
-          ls -la lede/.config
-          echo "前 30 行预览："
+          echo "最终 lede/.config 文件预览："
           head -n 30 lede/.config || true
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-      - name: 执行 defconfig 并显示摘要
+      - name: 执行 defconfig
         working-directory: ./lede
         run: |
           make defconfig
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "最终 .config 关键配置预览："
-          grep -E "CONFIG_TARGET_|CONFIG_PACKAGE_luci|CONFIG_PACKAGE_passwall|CONFIG_PACKAGE_mosdns|CONFIG_PACKAGE_luci-theme-argon" .config | sort | uniq || true
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
       - name: 替换 luci-app-passwall（稀疏检出最新版）
         working-directory: ./lede/feeds/luci/applications
@@ -249,6 +227,22 @@ jobs:
           cd ..
           rm -rf temp-passwall
 
+      - name: 检测目标平台（是否 mediatek）
+        id: detect_target
+        working-directory: ./lede
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "检测 .config 是否包含 mediatek..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          if grep -q "CONFIG_TARGET_mediatek=y" .config; then
+            echo "✔ 检测到目标为 mediatek，将编译双内核 6.6 + 6.12"
+            echo "IS_MTK=true" >> $GITHUB_ENV
+          else
+            echo "⚠️ 未检测到 mediatek，按普通模式只编译一次"
+            echo "IS_MTK=false" >> $GITHUB_ENV
+          fi
+
       - name: 应用自定义补丁（LAN IP + Argon + MTK补丁可选）
         working-directory: ./lede
         run: |
@@ -262,43 +256,44 @@ jobs:
           PREFIX_3=$(echo "$FULL_IP" | cut -d. -f1-3).
           PREFIX_2=$(echo "$FULL_IP" | cut -d. -f1-2).
 
-          # 修改默认 LAN IP
           sed -i "s/192.168.1.1/$FULL_IP/g" package/base-files/files/bin/config_generate
           sed -i "s/192.168.1./$PREFIX_3/g" package/base-files/files/bin/config_generate
           sed -i "s/192.168./$PREFIX_2/g" package/base-files/files/bin/config_generate
           sed -i "s/192\.168\.1\.[0-9]\+/$FULL_IP/g" package/base-files/files/bin/config_generate
 
-          # 强制使用 Argon 主题
           find feeds/luci/collections/ -type f -name Makefile -exec \
             sed -i -E 's/(luci-theme-)[a-zA-Z0-9_-]+/\1argon/g' {} \;
-          # ────────────────────────────────────────────────
-          # MTK MT7987 补丁：同步写入所有 files-* 内核目录
-          # ────────────────────────────────────────────────
+
+          # 如果不是 MTK，则自动跳过 mediatek 补丁下载
+          if [ "${{ env.IS_MTK }}" != "true" ]; then
+            echo "⚠️ 非 mediatek 平台，跳过 MTK 补丁写入"
+            exit 0
+          fi
+
+          # MTK 补丁同步到所有 files-* 目录
           if [ "${{ env.ENABLE_MTK_PATCH }}" = "true" ]; then
             echo "✔ 启用 MTK MT7987 补丁下载..."
 
             BASE_DIR="target/linux/mediatek"
 
             if [ ! -d "$BASE_DIR" ]; then
-              echo "❌ mediatek 目标目录不存在：$BASE_DIR"
-              exit 1
+              echo "⚠️ 当前源码无 mediatek 目录，跳过 MTK 补丁"
+              exit 0
             fi
 
             FILES_LIST=$(ls -d ${BASE_DIR}/files-* 2>/dev/null | sort -V)
 
             if [ -z "$FILES_LIST" ]; then
-              echo "❌ 未检测到 files-* 目录，无法写入补丁"
+              echo "❌ 未检测到 files-* 目录"
               exit 1
             fi
 
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "检测到以下内核 files 目录："
+            echo "检测到以下 files 目录："
             echo "$FILES_LIST"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
             for FILES_DIR in $FILES_LIST; do
               echo "---------------------------------------------------"
-              echo "正在写入补丁到：$FILES_DIR"
+              echo "写入补丁到：$FILES_DIR"
 
               RESET_DIR="${FILES_DIR}/include/dt-bindings/reset"
               CLOCK_DIR="${FILES_DIR}/include/dt-bindings/clock"
@@ -306,111 +301,156 @@ jobs:
               mkdir -p "$RESET_DIR"
               mkdir -p "$CLOCK_DIR"
 
-              echo "下载 reset 头文件..."
               wget -q -O "$RESET_DIR/mediatek,mt7987-resets.h" \
-                "https://raw.githubusercontent.com/padavanonly/immortalwrt-mt798x-6.6/b3f543825e91bdb5fb266c7d56f7f49b90fd7a54/target/linux/mediatek/files-6.6/include/dt-bindings/reset/mediatek%2Cmt7987-resets.h" || {
-                  echo "❌ reset 头文件下载失败"
-                  exit 1
-                }
+                "https://raw.githubusercontent.com/padavanonly/immortalwrt-mt798x-6.6/b3f543825e91bdb5fb266c7d56f7f49b90fd7a54/target/linux/mediatek/files-6.6/include/dt-bindings/reset/mediatek%2Cmt7987-resets.h" || exit 1
 
-              echo "下载 clock 头文件..."
               wget -q -O "$CLOCK_DIR/mediatek,mt7987-clk.h" \
-                "https://raw.githubusercontent.com/u-boot/u-boot/master/include/dt-bindings/clock/mediatek%2Cmt7987-clk.h" || {
-                  echo "❌ clock 头文件下载失败"
-                  exit 1
-                }
-
-              echo "✔ 已写入完成：$FILES_DIR"
-              ls -la "$RESET_DIR" || true
-              ls -la "$CLOCK_DIR" || true
+                "https://raw.githubusercontent.com/u-boot/u-boot/master/include/dt-bindings/clock/mediatek%2Cmt7987-clk.h" || exit 1
             done
 
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "✔ MTK 补丁已同步写入所有 files-* 内核目录"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
+            echo "✔ MTK 补丁同步完成"
           else
             echo "⚠️ 未启用 MTK 补丁下载，跳过"
           fi
 
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "自定义补丁应用完成"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-      - name: 缓存下载文件
-        uses: actions/cache@v4
-        with:
-          path: lede/dl
-          key: ${{ runner.os }}-lede-dl-${{ hashFiles('lede/.config') }}
-          restore-keys: ${{ runner.os }}-lede-dl-
-
-      - name: 缓存工具链
-        uses: actions/cache@v4
-        with:
-          path: lede/staging_dir
-          key: ${{ runner.os }}-lede-toolchain-${{ hashFiles('lede/.config') }}
-          restore-keys: ${{ runner.os }}-lede-toolchain-
-
-      - name: 下载依赖包
+      - name: 普通模式编译（非 mediatek，只编译一次）
+        if: env.IS_MTK == 'false'
         working-directory: ./lede
         run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "普通模式：只编译一次"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
           make download -j$(nproc) || make download -j1 V=s
-
-      - name: 编译固件
-        working-directory: ./lede
-        run: |
           make -j$(nproc) V=s || make -j1 V=s
 
-      - name: 生成固件说明文件
+          mkdir -p ../output/normal/targets
+          mkdir -p ../output/normal/packages
+
+          cp -rf bin/targets/* ../output/normal/targets/ || true
+          cp -rf bin/packages/* ../output/normal/packages/ || true
+
+      - name: 编译固件（mediatek - 内核 6.6）
+        if: env.IS_MTK == 'true'
         working-directory: ./lede
         run: |
-          TARGET_DIR="bin/targets"
-          mkdir -p "$TARGET_DIR"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "mediatek 模式：开始编译内核 6.6"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-          FIND_DIR=$(find bin/targets -maxdepth 3 -type d | head -n 1)
-
-          if [ -z "$FIND_DIR" ]; then
-            FIND_DIR="bin/targets/x86/64"
-            mkdir -p "$FIND_DIR"
+          if [ -f "target/linux/mediatek/Makefile" ]; then
+            sed -i 's/^KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:=6.6/' target/linux/mediatek/Makefile || true
+            grep "KERNEL_PATCHVER" target/linux/mediatek/Makefile || true
+          else
+            echo "❌ 找不到 target/linux/mediatek/Makefile"
+            exit 1
           fi
 
-          cat > "$FIND_DIR/固件说明.txt" << EOF
+          make defconfig
+          make download -j$(nproc) || make download -j1 V=s
+          make -j$(nproc) V=s || make -j1 V=s
+
+          mkdir -p ../output/6.6/targets
+          mkdir -p ../output/6.6/packages
+
+          cp -rf bin/targets/* ../output/6.6/targets/ || true
+          cp -rf bin/packages/* ../output/6.6/packages/ || true
+
+      - name: 清理环境（为 6.12 准备）
+        if: env.IS_MTK == 'true'
+        working-directory: ./lede
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "开始 make dirclean，为 6.12 编译准备"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          make dirclean
+
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a -f
+
+          make defconfig
+
+      - name: 编译固件（mediatek - 内核 6.12）
+        if: env.IS_MTK == 'true'
+        working-directory: ./lede
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "mediatek 模式：开始编译内核 6.12"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          if [ -f "target/linux/mediatek/Makefile" ]; then
+            sed -i 's/^KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:=6.12/' target/linux/mediatek/Makefile || true
+            grep "KERNEL_PATCHVER" target/linux/mediatek/Makefile || true
+          else
+            echo "❌ 找不到 target/linux/mediatek/Makefile"
+            exit 1
+          fi
+
+          make defconfig
+          make download -j$(nproc) || make download -j1 V=s
+          make -j$(nproc) V=s || make -j1 V=s
+
+          mkdir -p ../output/6.12/targets
+          mkdir -p ../output/6.12/packages
+
+          cp -rf bin/targets/* ../output/6.12/targets/ || true
+          cp -rf bin/packages/* ../output/6.12/packages/ || true
+
+      - name: 打包 packages 为 zip
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "开始打包 packages 为 zip..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          cd output
+
+          if [ -d "normal/packages" ]; then
+            zip -r packages-${{ env.SOURCE }}-normal.zip normal/packages/*
+          fi
+
+          if [ -d "6.6/packages" ]; then
+            zip -r packages-${{ env.SOURCE }}-kernel6.6.zip 6.6/packages/*
+          fi
+
+          if [ -d "6.12/packages" ]; then
+            zip -r packages-${{ env.SOURCE }}-kernel6.12.zip 6.12/packages/*
+          fi
+
+          ls -la
+
+      - name: 生成固件说明文件
+        run: |
+          mkdir -p output
+
+          cat > output/固件说明.txt << EOF
           ==================== 固件信息 ====================
           固件来源: ${{ env.SOURCE }}
+          编译编号: ${{ github.run_number }}
           编译时间: $(date '+%Y-%m-%d %H:%M:%S')
           后台地址: http://${{ env.LAN_IP }}
-          用户名: root
-          密码: password
 
-          配置文件来源:
-          - 用户输入 config_url 优先
-          - 仓库内 .config / X86/.config / X86/X86.config
-          - 默认 raw: ${{ env.REMOTE_CONFIG_URL }}
+          config_url: ${{ env.CONFIG_URL }}
+          diy_url: ${{ env.DIY_URL }}
+          MTK补丁开关: ${{ env.ENABLE_MTK_PATCH }}
 
-          MTK 补丁下载开关: ${{ env.ENABLE_MTK_PATCH }}
-
-          diy.sh: 若存在则已执行（feeds 更新前执行）
+          mediatek 双内核编译: ${{ env.IS_MTK }}
           EOF
 
-      - name: 上传构建产物
+      - name: 上传构建产物（Artifact）
         uses: actions/upload-artifact@v4
         with:
           name: firmware-${{ env.SOURCE }}-${{ github.run_number }}
-          path: lede/bin/targets/**/*
+          path: output/**
           retention-days: 14
 
-      - name: 发布到 GitHub Releases
+      - name: 发布到 GitHub Releases（固件保留 + packages zip）
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ env.SOURCE }}-${{ github.run_number }}
-          name: Firmware ${{ env.SOURCE }} - ${{ env.LAN_IP }} - ${{ github.run_number }}
-          body: |
-            固件来源: ${{ env.SOURCE }}
-            编译编号: ${{ github.run_number }}
-            后台地址: http://${{ env.LAN_IP }}
-            MTK补丁开关: ${{ env.ENABLE_MTK_PATCH }}
-            config_url: ${{ env.CONFIG_URL }}
+          name: Firmware ${{ env.SOURCE }} - LAN:${{ env.LAN_IP }} - ${{ github.run_number }}
+          body_path: output/固件说明.txt
           files: |
-            lede/bin/targets/**/*
+            output/**/*
           draft: false
           prerelease: false
