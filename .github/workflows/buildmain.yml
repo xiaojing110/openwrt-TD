@@ -22,6 +22,15 @@ on:
         required: false
         default: ''
 
+      enable_mtk_patch:
+        description: '启用 MTK MT7987 头文件补丁下载（适用于 MTK 机型）'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
   schedule:
     - cron: '0 3 * * *'   # UTC 3:00 ≈ 北京时间 11:00
 
@@ -38,6 +47,9 @@ env:
 
   # 默认 raw 下载备用 config
   REMOTE_CONFIG_URL: "https://raw.githubusercontent.com/xiaojing110/openwrt-TD/main/X86/.config"
+
+  # MTK 补丁开关
+  ENABLE_MTK_PATCH: ${{ github.event.inputs.enable_mtk_patch || 'false' }}
 
   TZ: Asia/Shanghai
 
@@ -264,7 +276,7 @@ jobs:
           cd ..
           rm -rf temp-passwall
 
-      - name: 应用自定义补丁（LAN IP + Argon 主题）
+      - name: 应用自定义补丁（LAN IP + Argon 主题 + MTK 头文件补丁可选）
         working-directory: ./lede
         run: |
           export FULL_IP="${{ env.LAN_IP }}"
@@ -279,6 +291,42 @@ jobs:
           # 强制使用 Argon 主题
           find feeds/luci/collections/ -type f -name Makefile -exec \
             sed -i -E 's/(luci-theme-)[a-zA-Z0-9_-]+/\1argon/g' {} \;
+
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "MTK 补丁开关 ENABLE_MTK_PATCH = ${{ env.ENABLE_MTK_PATCH }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          if [ "${{ env.ENABLE_MTK_PATCH }}" = "true" ]; then
+            echo "✔ 启用 MTK MT7987 头文件补丁下载..."
+
+            RESET_DIR="target/linux/mediatek/files-6.12/include/dt-bindings/reset"
+            CLOCK_DIR="target/linux/mediatek/files-6.12/include/dt-bindings/clock"
+
+            mkdir -p "$RESET_DIR"
+            mkdir -p "$CLOCK_DIR"
+
+            echo "下载 reset 头文件..."
+            wget -O "$RESET_DIR/mediatek,mt7987-resets.h" \
+              "https://raw.githubusercontent.com/padavanonly/immortalwrt-mt798x-6.6/b3f543825e91bdb5fb266c7d56f7f49b90fd7a54/target/linux/mediatek/files-6.6/include/dt-bindings/reset/mediatek%2Cmt7987-resets.h" || {
+                echo "❌ reset 头文件下载失败"
+                exit 1
+              }
+
+            echo "下载 clock 头文件..."
+            wget -O "$CLOCK_DIR/mediatek,mt7987-clk.h" \
+              "https://raw.githubusercontent.com/u-boot/u-boot/master/include/dt-bindings/clock/mediatek%2Cmt7987-clk.h" || {
+                echo "❌ clock 头文件下载失败"
+                exit 1
+              }
+
+            echo "✔ MTK 补丁下载完成"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            ls -la "$RESET_DIR"
+            ls -la "$CLOCK_DIR"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          else
+            echo "⚠️ 未启用 MTK 补丁下载，跳过"
+          fi
 
       - name: 缓存下载文件
         uses: actions/cache@v4
@@ -311,6 +359,7 @@ jobs:
           cat > bin/targets/x86/64/固件说明.txt << EOF
           ==================== OpenWrt 固件信息 ====================
           源码来源: ${{ env.SOURCE }}
+          固件目标: x86_64 generic
           编译时间: $(date '+%Y-%m-%d %H:%M:%S')
           后台地址: http://${{ env.LAN_IP }}
           用户名: root
@@ -319,6 +368,7 @@ jobs:
           配置来源：优先 config_url -> 仓库 config -> 默认 raw
           config_url: ${{ env.CUSTOM_CONFIG_URL }}
           默认 raw URL: ${{ env.REMOTE_CONFIG_URL }}
+          MTK 补丁开关: ${{ env.ENABLE_MTK_PATCH }}
           EOF
 
       - name: 上传构建产物
