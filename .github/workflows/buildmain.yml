@@ -31,12 +31,12 @@ on:
           - 'false'
           - 'true'
 
-  schedule:
-    - cron: '0 3 * * *'   # UTC 3:00 ≈ 北京时间 11:00
+  #schedule:
+    #- cron: '0 3 * * *'   # UTC 3:00 ≈ 北京时间 11:00
 
-  push:
-    branches:
-      - main
+ # push:
+  #  branches:
+   #   - main
 
 env:
   LAN_IP: ${{ github.event.inputs.lan_ip || '10.0.0.1' }}
