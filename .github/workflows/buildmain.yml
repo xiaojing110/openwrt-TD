@@ -178,7 +178,7 @@ jobs:
 后台地址: http://$LAN_IP
 用户名: root
 密码: password
-备注：已预装 PassWall + MosDNS + Argon 主题
+已预装 PassWall + MosDNS + Argon 主题
 源代码来源: $SOURCE
 配置来源: ${CONFIG_URL:-仓库/默认}
 EOF
