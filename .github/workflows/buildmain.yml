@@ -271,9 +271,8 @@ jobs:
           # 强制使用 Argon 主题
           find feeds/luci/collections/ -type f -name Makefile -exec \
             sed -i -E 's/(luci-theme-)[a-zA-Z0-9_-]+/\1argon/g' {} \;
-
           # ────────────────────────────────────────────────
-          # MTK MT7987 补丁：自动判断内核版本目录 files-6.x
+          # MTK MT7987 补丁：同步写入所有 files-* 内核目录
           # ────────────────────────────────────────────────
           if [ "${{ env.ENABLE_MTK_PATCH }}" = "true" ]; then
             echo "✔ 启用 MTK MT7987 补丁下载..."
@@ -285,41 +284,50 @@ jobs:
               exit 1
             fi
 
-            echo "开始自动检测 files-6.x 内核目录..."
+            FILES_LIST=$(ls -d ${BASE_DIR}/files-* 2>/dev/null | sort -V)
 
-            FILES_DIR=$(ls -d ${BASE_DIR}/files-* 2>/dev/null | sort -V | tail -n 1)
-
-            if [ -z "$FILES_DIR" ]; then
+            if [ -z "$FILES_LIST" ]; then
               echo "❌ 未检测到 files-* 目录，无法写入补丁"
               exit 1
             fi
 
-            echo "✔ 检测到内核 files 目录: $FILES_DIR"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "检测到以下内核 files 目录："
+            echo "$FILES_LIST"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-            RESET_DIR="${FILES_DIR}/include/dt-bindings/reset"
-            CLOCK_DIR="${FILES_DIR}/include/dt-bindings/clock"
+            for FILES_DIR in $FILES_LIST; do
+              echo "---------------------------------------------------"
+              echo "正在写入补丁到：$FILES_DIR"
 
-            mkdir -p "$RESET_DIR"
-            mkdir -p "$CLOCK_DIR"
+              RESET_DIR="${FILES_DIR}/include/dt-bindings/reset"
+              CLOCK_DIR="${FILES_DIR}/include/dt-bindings/clock"
 
-            echo "下载 reset 头文件..."
-            wget -q -O "$RESET_DIR/mediatek,mt7987-resets.h" \
-              "https://raw.githubusercontent.com/padavanonly/immortalwrt-mt798x-6.6/b3f543825e91bdb5fb266c7d56f7f49b90fd7a54/target/linux/mediatek/files-6.6/include/dt-bindings/reset/mediatek%2Cmt7987-resets.h" || {
-                echo "❌ reset 头文件下载失败"
-                exit 1
-              }
+              mkdir -p "$RESET_DIR"
+              mkdir -p "$CLOCK_DIR"
 
-            echo "下载 clock 头文件..."
-            wget -q -O "$CLOCK_DIR/mediatek,mt7987-clk.h" \
-              "https://raw.githubusercontent.com/u-boot/u-boot/master/include/dt-bindings/clock/mediatek%2Cmt7987-clk.h" || {
-                echo "❌ clock 头文件下载失败"
-                exit 1
-              }
+              echo "下载 reset 头文件..."
+              wget -q -O "$RESET_DIR/mediatek,mt7987-resets.h" \
+                "https://raw.githubusercontent.com/padavanonly/immortalwrt-mt798x-6.6/b3f543825e91bdb5fb266c7d56f7f49b90fd7a54/target/linux/mediatek/files-6.6/include/dt-bindings/reset/mediatek%2Cmt7987-resets.h" || {
+                  echo "❌ reset 头文件下载失败"
+                  exit 1
+                }
 
-            echo "✔ MTK 补丁下载完成"
-            echo "已写入："
-            ls -la "$RESET_DIR" || true
-            ls -la "$CLOCK_DIR" || true
+              echo "下载 clock 头文件..."
+              wget -q -O "$CLOCK_DIR/mediatek,mt7987-clk.h" \
+                "https://raw.githubusercontent.com/u-boot/u-boot/master/include/dt-bindings/clock/mediatek%2Cmt7987-clk.h" || {
+                  echo "❌ clock 头文件下载失败"
+                  exit 1
+                }
+
+              echo "✔ 已写入完成：$FILES_DIR"
+              ls -la "$RESET_DIR" || true
+              ls -la "$CLOCK_DIR" || true
+            done
+
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "✔ MTK 补丁已同步写入所有 files-* 内核目录"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
           else
             echo "⚠️ 未启用 MTK 补丁下载，跳过"
