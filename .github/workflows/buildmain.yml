@@ -1,4 +1,4 @@
-name: 构建 LEDE 固件
+   name: 构建 LEDE / ImmortalWrt 固件
 
 on:
   workflow_dispatch:
@@ -30,28 +30,23 @@ on:
         options:
           - 'false'
           - 'true'
-
   #schedule:
-    #- cron: '0 3 * * *'   # UTC 3:00 ≈ 北京时间 11:00
+    #- cron: '0 3 * * *'   # UTC 3:00 ≈ 北京时间 11:00 定时编译，默认关闭
 
  # push:
   #  branches:
    #   - main
-
 env:
-  LAN_IP: ${{ github.event.inputs.lan_ip || '10.0.0.1' }}
-  SOURCE: ${{ github.event.inputs.source || 'lede' }}
+  TZ: Asia/Shanghai
 
-  # 用户自定义 config 地址（如果填了就优先用它）
-  CUSTOM_CONFIG_URL: ${{ github.event.inputs.config_url || '' }}
-
-  # 默认 raw 下载备用 config
+  # 远程默认 config（当仓库无配置、且未输入 config_url 时使用）
   REMOTE_CONFIG_URL: "https://raw.githubusercontent.com/xiaojing110/openwrt-TD/main/X86/.config"
 
-  # MTK 补丁开关
+  # 输入参数映射
+  LAN_IP: ${{ github.event.inputs.lan_ip || '10.0.0.1' }}
+  SOURCE: ${{ github.event.inputs.source || 'lede' }}
+  CONFIG_URL: ${{ github.event.inputs.config_url || '' }}
   ENABLE_MTK_PATCH: ${{ github.event.inputs.enable_mtk_patch || 'false' }}
-
-  TZ: Asia/Shanghai
 
 jobs:
   build:
@@ -123,38 +118,35 @@ jobs:
           remove-codeql: 'true'
           remove-docker-images: 'true'
 
-      # ────────────────────────────────────────────────
-      # 选择源码：LEDE 或 ImmortalWrt
-      # ────────────────────────────────────────────────
-      - name: 克隆 OpenWrt 源码（支持 lede / immortalwrt）
+      - name: 克隆源码（lede 或 immortalwrt）
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "选择的源码：${{ env.SOURCE }}"
+          echo "选择源码：${{ env.SOURCE }}"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-          if [ "${{ env.SOURCE }}" = "lede" ]; then
-            echo "开始克隆 LEDE 源码..."
-            git clone https://github.com/coolsnowwolf/lede.git lede
-          elif [ "${{ env.SOURCE }}" = "immortalwrt" ]; then
-            echo "开始克隆 ImmortalWrt 源码..."
+          if [ "${{ env.SOURCE }}" = "immortalwrt" ]; then
             git clone https://github.com/immortalwrt/immortalwrt.git lede
           else
-            echo "❌ 无效 SOURCE 参数: ${{ env.SOURCE }}"
-            exit 1
+            git clone https://github.com/coolsnowwolf/lede.git lede
           fi
 
-      # ────────────────────────────────────────────────
-      # 执行 diy.sh（必须在 feeds update/install 之前）
-      # ────────────────────────────────────────────────
-      - name: 执行 diy.sh（更新 feeds 之前执行）
+      - name: 修改 feeds.conf.default（可选）
+        working-directory: ./lede
+        run: |
+          echo "修改 feeds.conf.default..."
+          sed -i '/^src-git luci/c\src-git luci https://github.com/coolsnowwolf/luci.git;openwrt-25.12' feeds.conf.default || true
+          sed -i 's/^#src-git qmodem/src-git qmodem/' feeds.conf.default || true
+          echo "src-git mosdns https://github.com/sbwml/luci-app-mosdns.git" >> feeds.conf.default || true
+
+      - name: 执行 diy.sh（feeds 更新前执行）
         working-directory: ./lede
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "检查仓库根目录是否存在 diy.sh ..."
+          echo "检查是否存在 diy.sh..."
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
           if [ -f "../diy.sh" ]; then
-            echo "✔ 找到 diy.sh，开始执行..."
+            echo "✔ 找到仓库根目录 diy.sh，开始执行..."
             chmod +x ../diy.sh
             bash ../diy.sh
             echo "✔ diy.sh 执行完成"
@@ -162,18 +154,10 @@ jobs:
             echo "⚠️ 未找到 diy.sh，跳过"
           fi
 
-          echo ""
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "feeds.conf.default 当前内容："
+          echo "feeds.conf.default 最终内容："
           cat feeds.conf.default || true
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-      - name: 修改 feeds.conf.default（原有自定义）
-        working-directory: ./lede
-        run: |
-          sed -i '/^src-git luci/c\src-git luci https://github.com/coolsnowwolf/luci.git;openwrt-25.12' feeds.conf.default
-          sed -i 's/^#src-git qmodem/src-git qmodem/' feeds.conf.default || true
-          echo "src-git mosdns https://github.com/sbwml/luci-app-mosdns.git" >> feeds.conf.default
 
       - name: 更新并安装 feeds（重要：放在 .config 之前）
         working-directory: ./lede
@@ -181,42 +165,31 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a -f
 
-      # ────────────────────────────────────────────────
-      # 优先使用用户输入 config_url，否则用仓库配置，否则用默认 raw
-      # ────────────────────────────────────────────────
-      - name: 加载 .config（支持自定义 config_url 优先）
+      - name: 加载 .config（输入URL优先 -> 仓库优先 -> raw 默认）
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "开始加载配置文件 .config..."
-          echo "自定义 config_url: ${{ env.CUSTOM_CONFIG_URL }}"
-          echo "默认 raw URL:      ${{ env.REMOTE_CONFIG_URL }}"
+          echo "开始加载 .config..."
+          echo "CONFIG_URL: ${{ env.CONFIG_URL }}"
+          echo "默认 REMOTE_CONFIG_URL: ${{ env.REMOTE_CONFIG_URL }}"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-          # 1) 如果用户输入了 config_url，直接优先使用
-          if [ -n "${{ env.CUSTOM_CONFIG_URL }}" ]; then
-            echo "✔ 检测到用户自定义 config_url，优先下载..."
-            wget -O lede/.config "${{ env.CUSTOM_CONFIG_URL }}" || {
-              echo "❌ 自定义 config_url 下载失败，请检查地址是否正确"
+          FOUND_CONFIG=""
+
+          if [ -n "${{ env.CONFIG_URL }}" ]; then
+            echo "✔ 检测到用户输入 config_url，优先使用该地址下载..."
+            wget -O lede/.config "${{ env.CONFIG_URL }}" || {
+              echo "❌ 自定义 config_url 下载失败"
               exit 1
             }
 
             if [ ! -s "lede/.config" ]; then
-              echo "❌ 下载成功但文件为空，停止运行"
+              echo "❌ 下载成功但文件为空"
               exit 1
             fi
 
-            echo "✔ 自定义 config_url 下载成功"
-
+            echo "✔ 自定义 .config 下载成功"
           else
-            echo "⚠️ 未填写 config_url，开始查找仓库中的 .config 文件..."
-            echo "优先级："
-            echo "  1) ./.config"
-            echo "  2) ./X86/.config"
-            echo "  3) ./X86/X86.config"
-            echo "找不到则使用默认 raw 下载"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-            FOUND_CONFIG=""
+            echo "未输入 config_url，开始查找仓库配置文件..."
 
             if [ -f ".config" ]; then
               FOUND_CONFIG=".config"
@@ -230,7 +203,7 @@ jobs:
               echo "✔ 已找到仓库配置文件：$FOUND_CONFIG"
               cp -fv "$FOUND_CONFIG" lede/.config
             else
-              echo "⚠️ 仓库内未找到任何 .config，准备使用默认 raw 下载..."
+              echo "⚠️ 仓库内未找到任何 .config，使用默认 raw 下载..."
 
               wget -O lede/.config "${{ env.REMOTE_CONFIG_URL }}" || {
                 echo "❌ raw 下载失败，请检查 URL 是否正确"
@@ -238,11 +211,11 @@ jobs:
               }
 
               if [ ! -s "lede/.config" ]; then
-                echo "❌ 下载成功但文件为空，停止运行"
+                echo "❌ 下载成功但文件为空"
                 exit 1
               fi
 
-              echo "✔ 默认 raw 下载成功"
+              echo "✔ raw 下载成功"
             fi
           fi
 
@@ -250,8 +223,8 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "最终 lede/.config 文件信息："
           ls -la lede/.config
-          echo "前 20 行预览："
-          head -n 20 lede/.config || true
+          echo "前 30 行预览："
+          head -n 30 lede/.config || true
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
       - name: 执行 defconfig 并显示摘要
@@ -276,13 +249,20 @@ jobs:
           cd ..
           rm -rf temp-passwall
 
-      - name: 应用自定义补丁（LAN IP + Argon 主题 + MTK 头文件补丁可选）
+      - name: 应用自定义补丁（LAN IP + Argon + MTK补丁可选）
         working-directory: ./lede
         run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "开始应用自定义补丁..."
+          echo "LAN_IP: ${{ env.LAN_IP }}"
+          echo "ENABLE_MTK_PATCH: ${{ env.ENABLE_MTK_PATCH }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
           export FULL_IP="${{ env.LAN_IP }}"
           PREFIX_3=$(echo "$FULL_IP" | cut -d. -f1-3).
           PREFIX_2=$(echo "$FULL_IP" | cut -d. -f1-2).
 
+          # 修改默认 LAN IP
           sed -i "s/192.168.1.1/$FULL_IP/g" package/base-files/files/bin/config_generate
           sed -i "s/192.168.1./$PREFIX_3/g" package/base-files/files/bin/config_generate
           sed -i "s/192.168./$PREFIX_2/g" package/base-files/files/bin/config_generate
@@ -292,41 +272,62 @@ jobs:
           find feeds/luci/collections/ -type f -name Makefile -exec \
             sed -i -E 's/(luci-theme-)[a-zA-Z0-9_-]+/\1argon/g' {} \;
 
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "MTK 补丁开关 ENABLE_MTK_PATCH = ${{ env.ENABLE_MTK_PATCH }}"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
+          # ────────────────────────────────────────────────
+          # MTK MT7987 补丁：自动判断内核版本目录 files-6.x
+          # ────────────────────────────────────────────────
           if [ "${{ env.ENABLE_MTK_PATCH }}" = "true" ]; then
-            echo "✔ 启用 MTK MT7987 头文件补丁下载..."
+            echo "✔ 启用 MTK MT7987 补丁下载..."
 
-            RESET_DIR="target/linux/mediatek/files-6.12/include/dt-bindings/reset"
-            CLOCK_DIR="target/linux/mediatek/files-6.12/include/dt-bindings/clock"
+            BASE_DIR="target/linux/mediatek"
+
+            if [ ! -d "$BASE_DIR" ]; then
+              echo "❌ mediatek 目标目录不存在：$BASE_DIR"
+              exit 1
+            fi
+
+            echo "开始自动检测 files-6.x 内核目录..."
+
+            FILES_DIR=$(ls -d ${BASE_DIR}/files-* 2>/dev/null | sort -V | tail -n 1)
+
+            if [ -z "$FILES_DIR" ]; then
+              echo "❌ 未检测到 files-* 目录，无法写入补丁"
+              exit 1
+            fi
+
+            echo "✔ 检测到内核 files 目录: $FILES_DIR"
+
+            RESET_DIR="${FILES_DIR}/include/dt-bindings/reset"
+            CLOCK_DIR="${FILES_DIR}/include/dt-bindings/clock"
 
             mkdir -p "$RESET_DIR"
             mkdir -p "$CLOCK_DIR"
 
             echo "下载 reset 头文件..."
-            wget -O "$RESET_DIR/mediatek,mt7987-resets.h" \
+            wget -q -O "$RESET_DIR/mediatek,mt7987-resets.h" \
               "https://raw.githubusercontent.com/padavanonly/immortalwrt-mt798x-6.6/b3f543825e91bdb5fb266c7d56f7f49b90fd7a54/target/linux/mediatek/files-6.6/include/dt-bindings/reset/mediatek%2Cmt7987-resets.h" || {
                 echo "❌ reset 头文件下载失败"
                 exit 1
               }
 
             echo "下载 clock 头文件..."
-            wget -O "$CLOCK_DIR/mediatek,mt7987-clk.h" \
+            wget -q -O "$CLOCK_DIR/mediatek,mt7987-clk.h" \
               "https://raw.githubusercontent.com/u-boot/u-boot/master/include/dt-bindings/clock/mediatek%2Cmt7987-clk.h" || {
                 echo "❌ clock 头文件下载失败"
                 exit 1
               }
 
             echo "✔ MTK 补丁下载完成"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            ls -la "$RESET_DIR"
-            ls -la "$CLOCK_DIR"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "已写入："
+            ls -la "$RESET_DIR" || true
+            ls -la "$CLOCK_DIR" || true
+
           else
             echo "⚠️ 未启用 MTK 补丁下载，跳过"
           fi
+
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "自定义补丁应用完成"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
       - name: 缓存下载文件
         uses: actions/cache@v4
@@ -355,36 +356,53 @@ jobs:
       - name: 生成固件说明文件
         working-directory: ./lede
         run: |
-          mkdir -p bin/targets/x86/64
-          cat > bin/targets/x86/64/固件说明.txt << EOF
-          ==================== OpenWrt 固件信息 ====================
-          源码来源: ${{ env.SOURCE }}
-          固件目标: x86_64 generic
+          TARGET_DIR="bin/targets"
+          mkdir -p "$TARGET_DIR"
+
+          FIND_DIR=$(find bin/targets -maxdepth 3 -type d | head -n 1)
+
+          if [ -z "$FIND_DIR" ]; then
+            FIND_DIR="bin/targets/x86/64"
+            mkdir -p "$FIND_DIR"
+          fi
+
+          cat > "$FIND_DIR/固件说明.txt" << EOF
+          ==================== 固件信息 ====================
+          固件来源: ${{ env.SOURCE }}
           编译时间: $(date '+%Y-%m-%d %H:%M:%S')
           后台地址: http://${{ env.LAN_IP }}
           用户名: root
           密码: password
-          备注：已预装 PassWall + MosDNS + Argon 主题
-          配置来源：优先 config_url -> 仓库 config -> 默认 raw
-          config_url: ${{ env.CUSTOM_CONFIG_URL }}
-          默认 raw URL: ${{ env.REMOTE_CONFIG_URL }}
-          MTK 补丁开关: ${{ env.ENABLE_MTK_PATCH }}
+
+          配置文件来源:
+          - 用户输入 config_url 优先
+          - 仓库内 .config / X86/.config / X86/X86.config
+          - 默认 raw: ${{ env.REMOTE_CONFIG_URL }}
+
+          MTK 补丁下载开关: ${{ env.ENABLE_MTK_PATCH }}
+
+          diy.sh: 若存在则已执行（feeds 更新前执行）
           EOF
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: openwrt-x86_64-${{ env.SOURCE }}-${{ github.run_number }}
-          path: lede/bin/targets/x86/64/*
+          name: firmware-${{ env.SOURCE }}-${{ github.run_number }}
+          path: lede/bin/targets/**/*
           retention-days: 14
 
       - name: 发布到 GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ env.SOURCE }}-${{ github.run_number }}
-          name: OpenWrt x86_64 (${{ env.SOURCE }}) - ${{ env.LAN_IP }} - ${{ github.run_number }}
-          body_path: lede/bin/targets/x86/64/固件说明.txt
+          name: Firmware ${{ env.SOURCE }} - ${{ env.LAN_IP }} - ${{ github.run_number }}
+          body: |
+            固件来源: ${{ env.SOURCE }}
+            编译编号: ${{ github.run_number }}
+            后台地址: http://${{ env.LAN_IP }}
+            MTK补丁开关: ${{ env.ENABLE_MTK_PATCH }}
+            config_url: ${{ env.CONFIG_URL }}
           files: |
-            lede/bin/targets/x86/64/*
+            lede/bin/targets/**/*
           draft: false
           prerelease: false
