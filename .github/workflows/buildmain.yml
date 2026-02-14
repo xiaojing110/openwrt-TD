@@ -360,50 +360,44 @@ jobs:
           echo "打包完成，output 文件如下："
           ls -la
 
-      - name: 生成 Release 名称与说明
+      - name: 生成 Release 说明
         run: |
           DATE=$(date '+%y%m%d')
-          SOURCE_UPPER=$(echo "${{ env.SOURCE }}" | tr a-z A-Z)
+          NAME=$(echo "$SOURCE" | tr a-z A-Z)
 
-          # 读取固件目标
           BOARD=$(grep -E "^CONFIG_TARGET_BOARD=" lede/.config | cut -d'"' -f2)
           SUBTARGET=$(grep -E "^CONFIG_TARGET_SUBTARGET=" lede/.config | cut -d'"' -f2)
           PROFILE=$(grep -E "^CONFIG_TARGET_PROFILE=" lede/.config | cut -d'"' -f2)
 
-          if [ -z "$BOARD" ]; then BOARD="未知"; fi
-          if [ -z "$SUBTARGET" ]; then SUBTARGET="未知"; fi
+          [ -z "$BOARD" ] && BOARD="未知"
+          [ -z "$SUBTARGET" ] && SUBTARGET="未知"
 
           TARGET="$BOARD/$SUBTARGET"
-          if [ -n "$PROFILE" ]; then
-            TARGET="$TARGET ($PROFILE)"
-          fi
+          [ -n "$PROFILE" ] && TARGET="$TARGET ($PROFILE)"
 
-          # 配置来源
-          if [ -n "${{ env.CONFIG_URL }}" ]; then
-            CONFIG_SRC="${{ env.CONFIG_URL }}"
+          if [ -n "$CONFIG_URL" ]; then
+            CONFIG_SRC="$CONFIG_URL"
           else
-            CONFIG_SRC="仓库内 .config / X86/.config / X86/X86.config"
+            CONFIG_SRC="仓库/默认"
           fi
 
-          # 源代码来源
-          if [ "${{ env.SOURCE }}" = "immortalwrt" ]; then
+          if [ "$SOURCE" = "immortalwrt" ]; then
             SOURCE_URL="https://github.com/immortalwrt/immortalwrt"
           else
             SOURCE_URL="https://github.com/coolsnowwolf/lede"
           fi
 
-          RELEASE_NAME="${SOURCE_UPPER}-Thatdream-${DATE}"
-
+          RELEASE_NAME="${NAME}-Thatdream-${DATE}"
           echo "RELEASE_NAME=$RELEASE_NAME" >> $GITHUB_ENV
 
-          cat > release_note.txt << EOF
+cat > release_note.txt << EOF
 固件目标: $TARGET
 编译时间: $(date '+%Y-%m-%d %H:%M:%S')
-后台地址: http://${{ env.LAN_IP }}
+后台地址: http://$LAN_IP
 用户名: root
 密码: password
 备注：已预装 PassWall + MosDNS + Argon 主题
-源代码来源：$SOURCE_URL
+源代码来源: $SOURCE_URL
 配置来源: $CONFIG_SRC
 EOF
 
