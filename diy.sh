@@ -1,19 +1,39 @@
 #!/bin/bash
 
-echo "修改 feeds.conf.default..."
-echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> feeds.conf.default
-echo "src-git small https://github.com/kenzok8/small" >> feeds.conf.default
+#echo "修改 feeds.conf.default..."
+##默认已增加
+#echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> feeds.conf.default
+#echo "src-git small https://github.com/kenzok8/small" >> feeds.conf.default
 
 ##下面内容仅在需要时启用，目前是旧版本后续配置为diy2.sh  暂时不要启用
+echo "更新sing-box"
 # 自动识别并替换 PKG_VERSION 和 PKG_HASH
-# sed -i -E 's/(PKG_VERSION:=)[^ ]+/\1 1.11.15/' feeds/packages/net/sing-box/Makefile
-# sed -i -E 's|(PKG_HASH:=)[^ ]+|\1 97d58dd873d7cf9b5e4b4aca5516568f3b2e6f5c3dbc93241c82fff5e4a609fd|' feeds/packages/net/sing-box/Makefile
+sed -i -E 's/(PKG_VERSION:=)[^ ]+/\1 1.13.0-rc.7/' feeds/packages/net/sing-box/Makefile
+sed -i -E 's|(PKG_HASH:=)[^ ]+|\1 45774575b5b8a713e1a0c84588fc0225cdfd2497d6a7bd06a191e6603d5adaa3|' feeds/packages/net/sing-box/Makefile
 
 # 修改 xray-core 包中的 PKG_VERSION 和 PKG_HASH
-#echo "更新xray-core"
+echo "更新xray-core"
 # 自动识别并替换 PKG_VERSION 和 PKG_HASH
-#sed -i -E 's/(PKG_VERSION:=)[^ ]+/\1 25.3.31/' feeds/packages/net/xray-core/Makefile
-#sed -i -E 's|(PKG_HASH:=)[^ ]+|\1 681a4546b7c318e92243dfcea2fc3229714cb4e7a570dfcf73e935eb13c6078e|' feeds/packages/net/xray-core/Makefile
+sed -i -E 's/(PKG_VERSION:=)[^ ]+/\1 26.2.6/' feeds/packages/net/xray-core/Makefile
+sed -i -E 's|(PKG_HASH:=)[^ ]+|\1 a41f170a03fa25d9d39f23f344540b02336a5c893d97b1b837b9477f4b35bc7f|' feeds/packages/net/xray-core/Makefile
+
+# 修改 v2rayA 包中的 PKG_VERSION 和 PKG_HASH
+echo "更新v2rayA"
+# 自动识别并替换 PKG_VERSION 和 PKG_HASH
+sed -i -E 's/(PKG_VERSION:=)[^ ]+/\1 2.2.7.5/' feeds/packages/net/v2rayA/Makefile
+sed -i -E 's|(PKG_HASH:=)[^ ]+|\1 d0daccace51572d730fb710f7df190beed47d51ec1091d2fba38719b9417b385|' feeds/packages/net/v2rayA/Makefile
+
+# 修改 tools工具7z 包中的 PKG_VERSION 和 PKG_HASH
+echo "更新7z"
+# 自动识别并替换 PKG_VERSION 和 PKG_HASH
+sed -i -E 's/(PKG_VERSION:=)[^ ]+/\1 26.00/' tools/7z/Makefile
+sed -i -E 's|(PKG_HASH:=)[^ ]+|\1 3e596155744af055a77fc433c703d54e3ea9212246287b5b1436a6beac060f16|' tools/7z/Makefile
+
+# 修改 tools工具链中fakeroot 包中的 PKG_VERSION 和 PKG_HASH
+echo "更新fakeroot"
+# 自动识别并替换 PKG_VERSION 和 PKG_HASH
+sed -i -E 's/(PKG_VERSION:=)[^ ]+/\1 1.37.1.2/' tools/fakeroot/Makefile
+sed -i -E 's|(PKG_HASH:=)[^ ]+|\1 959496928c8a676ec8377f665ff6a19a707bfad693325f9cc4a4126642f53224|' tools/fakeroot/Makefile
 
 # 自动识别并替换 LINUX_VERSION 和 LINUX_KERNEL_HASH
 #echo "更新 kernel-6.6内核"
