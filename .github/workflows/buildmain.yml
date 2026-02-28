@@ -212,16 +212,33 @@ jobs:
           ================================================
           EOF
 
-      - name: 打包完整 bin 目录为 zip
+      - name: 打包 bin 目录为 zip（只包含 .ipk / .apk 等，排除固件文件）
         working-directory: ./lede
         run: |
-          ZIP_NAME="firmware-full-bin-${{ env.SOURCE }}-${{ github.run_number }}.zip"
+          ZIP_NAME="packages-ipk-apk-${{ env.SOURCE }}-${{ github.run_number }}.zip"
+          
           cd bin
-          zip -r -9 "../${ZIP_NAME}" .
+          
+          # 使用 -x 排除常见固件文件后缀（根据实际情况可增减）
+          zip -r -9 "../${ZIP_NAME}" . \
+            -x "*/targets/*/*.img" \
+            -x "*/targets/*/*.bin" \
+            -x "*/targets/*/*.squashfs" \
+            -x "*/targets/*/*.vdi" \
+            -x "*/targets/*/*.vmdk" \
+            -x "*/targets/*/*.ova" \
+            -x "*/targets/*/*.gz" \
+            -x "*/targets/*/*.xz" \
+            -x "*/targets/*/*.tar.gz" \
+            -x "*/targets/*/profiles.json" \
+            -x "*/targets/*/sha256sums" \
+            || true   # 如果没有匹配文件也不报错
+          
           cd ..
           ls -lh "${ZIP_NAME}" || true
+          unzip -l "${ZIP_NAME}" | head -n 20 || true   # 调试：列出 zip 前20行内容
 
-      - name: 发布到 GitHub Releases（排除 .ipk .apk）
+       - name: 发布到 GitHub Releases（固件文件 + 只含 ipk/apk 的 zip）
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ env.SOURCE }}-${{ github.run_number }}
@@ -236,12 +253,12 @@ jobs:
             - **配置来源**： ${{ env.CONFIG_URL || '默认远程' }}
             - **diy 脚本**： ${{ env.DIY_URL || '本地 diy.sh（若存在）' }}
 
-            **已上传内容说明**：
-            • 系统固件文件（.img / .bin / .squashfs / .vdi / .vmdk / .ova 等）
+            **已上传内容**：
+            • 系统固件文件（.img / .bin / .squashfs / .vdi / .vmdk / .ova 等） → 用于直接刷机
             • 固件说明.txt
-            • firmware-full-bin-*.zip → 完整 bin 目录打包（包含 targets/、packages/ 等所有子目录）
+            • packages-ipk-apk-*.zip → 只包含 .ipk / .apk 等软件包（已排除所有固件镜像文件）
 
-            **不包含**：.ipk / .apk 等软件包文件
+            **不包含在 zip 中**：任何 .img .bin .squashfs 等固件镜像
 
           files: |
             lede/bin/targets/**/*.img
@@ -252,6 +269,6 @@ jobs:
             lede/bin/targets/**/*.vmdk
             lede/bin/targets/**/*.ova
             lede/bin/targets/**/固件说明.txt
-            lede/firmware-full-bin-*.zip
+            lede/packages-ipk-apk-*.zip
           draft: false
           prerelease: false
