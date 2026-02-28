@@ -18,6 +18,12 @@ echo "更新xray-core"
 sed -i -E 's/(PKG_VERSION:=)[^ ]+/\1 26.2.6/' feeds/packages/net/xray-core/Makefile
 sed -i -E 's|(PKG_HASH:=)[^ ]+|\1 a41f170a03fa25d9d39f23f344540b02336a5c893d97b1b837b9477f4b35bc7f|' feeds/packages/net/xray-core/Makefile
 
+# 修改 intel-microcode 包中的 PKG_VERSION 和 PKG_HASH
+echo "更新intel-microcode"
+# 自动识别并替换 PKG_VERSION 和 PKG_HASH
+sed -i -E 's/(PKG_VERSION:=)[^ ]+/\1 260210/' package/intel-microcode/Makefile
+sed -i -E 's|(PKG_HASH:=)[^ ]+|\1 4d8654f4f6c7d14f496bcfcb097522d2825282eb8ea27605d882092371d66a76|' package/intel-microcode/Makefile
+
 # 修改 v2rayA 包中的 PKG_VERSION 和 PKG_HASH
 echo "更新v2raya"
 # 自动识别并替换 PKG_VERSION 和 PKG_HASH
