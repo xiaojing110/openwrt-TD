@@ -18,10 +18,10 @@ sed -i -E 's/(PKG_VERSION:=)[^ ]+/\1 26.2.6/' feeds/packages/net/xray-core/Makef
 sed -i -E 's|(PKG_HASH:=)[^ ]+|\1 a41f170a03fa25d9d39f23f344540b02336a5c893d97b1b837b9477f4b35bc7f|' feeds/packages/net/xray-core/Makefile
 
 # 修改 v2rayA 包中的 PKG_VERSION 和 PKG_HASH
-echo "更新v2rayA"
+echo "更新v2raya"
 # 自动识别并替换 PKG_VERSION 和 PKG_HASH
-sed -i -E 's/(PKG_VERSION:=)[^ ]+/\1 2.2.7.5/' feeds/packages/net/v2rayA/Makefile
-sed -i -E 's|(PKG_HASH:=)[^ ]+|\1 d0daccace51572d730fb710f7df190beed47d51ec1091d2fba38719b9417b385|' feeds/packages/net/v2rayA/Makefile
+sed -i -E 's/(PKG_VERSION:=)[^ ]+/\1 2.2.7.5/' feeds/packages/net/v2raya/Makefile
+sed -i -E 's|(PKG_HASH:=)[^ ]+|\1 d0daccace51572d730fb710f7df190beed47d51ec1091d2fba38719b9417b385|' feeds/packages/net/v2raya/Makefile
 
 # 修改 tools工具7z 包中的 PKG_VERSION 和 PKG_HASH
 echo "更新7z"
