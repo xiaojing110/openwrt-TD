@@ -67,7 +67,7 @@ jobs:
             libreadline-dev libssl-dev libtool llvm lrzsz libnsl-dev ninja-build p7zip \
             p7zip-full patch pkgconf python3 python3-pyelftools python3-setuptools \
             qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs \
-            upx-ucl unzip vim wget xmlto xxd zlib1g-dev
+            upx-ucl unzip vim wget xmlto xxd zlib1g-dev zip
           sudo apt clean
 
       - name: 最大化构建空间
@@ -89,13 +89,12 @@ jobs:
             git clone --depth=1 https://github.com/coolsnowwolf/lede.git lede
           fi
 
-      - name: 修改 feeds.conf.default（可选增强）
+      - name: 修改 feeds.conf.default（可选）
         working-directory: ./lede
         run: |
           sed -i '/^src-git luci/c\src-git luci https://github.com/coolsnowwolf/luci.git;openwrt-25.12' feeds.conf.default || true
           sed -i 's/^#src-git qmodem/src-git qmodem/' feeds.conf.default || true
           echo "src-git mosdns https://github.com/sbwml/luci-app-mosdns.git" >> feeds.conf.default || true
-          cat feeds.conf.default
 
       - name: 更新并安装 feeds
         working-directory: ./lede
@@ -146,7 +145,6 @@ jobs:
             exit 1
           fi
 
-          head -n 30 .config || true
           make defconfig
 
       - name: 替换 luci-app-passwall
@@ -161,23 +159,20 @@ jobs:
           mv luci-app-passwall ../../
           cd ..
           rm -rf temp-passwall
-          ls -la luci-app-passwall || echo "passwall 替换后目录检查"
 
       - name: 应用自定义修改（LAN IP + 强制 Argon 主题）
         working-directory: ./lede
         run: |
-          # 修改 LAN IP
           sed -i "s/192.168.1.1/${{ env.LAN_IP }}/g" package/base-files/files/bin/config_generate
           PREFIX_3=$(echo "${{ env.LAN_IP }}" | cut -d. -f1-3).
           PREFIX_2=$(echo "${{ env.LAN_IP }}" | cut -d. -f1-2).
           sed -i "s/192.168.1./${PREFIX_3}/g" package/base-files/files/bin/config_generate
           sed -i "s/192.168./${PREFIX_2}/g"   package/base-files/files/bin/config_generate
 
-          # 强制使用 Argon 主题
           find feeds/luci/collections/ -type f -name Makefile -exec \
             sed -i -E 's/(luci-theme-)[a-zA-Z0-9_-]+/\1argon/g' {} \;
 
-      - name: 缓存 dl 与 staging_dir
+      - name: 缓存下载文件和工具链
         uses: actions/cache@v4
         with:
           path: |
@@ -213,22 +208,24 @@ jobs:
           作者/维护者     : ${{ env.BUILD_AUTHOR }}
           config 来源     : ${{ env.CONFIG_URL || env.REMOTE_CONFIG_URL }}
           diy 来源        : ${{ env.DIY_URL || '本地 diy.sh（若存在）' || '无 diy' }}
-          Passwall 来源   : Openwrt-Passwall/openwrt-passwall (最新 sparse checkout)
+          Passwall 来源   : Openwrt-Passwall/openwrt-passwall (sparse checkout)
           ================================================
           EOF
 
-      - name: 上传构建产物
-        uses: actions/upload-artifact@v4
-        with:
-          name: firmware-${{ env.SOURCE }}-${{ github.run_number }}
-          path: lede/bin/targets/**/*
-          retention-days: 14
+      - name: 打包完整 targets 目录为 zip
+        working-directory: ./lede
+        run: |
+          ZIP_NAME="firmware-full-${{ env.SOURCE }}-${{ github.run_number }}.zip"
+          cd bin
+          zip -r "../${ZIP_NAME}" targets/
+          cd ..
+          ls -lh "${ZIP_NAME}" || true
 
       - name: 发布到 GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ env.SOURCE }}-${{ github.run_number }}
-          name: ${{ env.SOURCE }} 固件 - ${{ env.LAN_IP }} - Run ${{ github.run_number }}
+          name: ${{ env.SOURCE }} 固件 - ${{ env.LAN_IP }} - ${{ github.run_number }}
           body: |
             ### 固件构建信息
 
@@ -236,15 +233,16 @@ jobs:
             - **LAN IP**： ${{ env.LAN_IP }}
             - **编译完成时间**： $(date '+%Y-%m-%d %H:%M:%S %Z') (Asia/Shanghai)
             - **作者/维护者**： ${{ env.BUILD_AUTHOR }}
-            - **配置来源**：
-              - 用户 config_url： ${{ env.CONFIG_URL || '未提供，使用默认远程' }}
-              - 默认远程： ${{ env.REMOTE_CONFIG_URL }}
-            - **diy 脚本**：
-              - 远程 diy_url： ${{ env.DIY_URL || '未提供' }}
-              - 本地 diy.sh： ${{ (env.DIY_URL == '') && '若仓库存在则执行' || '被远程覆盖' }}
-            - **Passwall**： 使用 Openwrt-Passwall/openwrt-passwall 最新版（sparse checkout 方式）
+            - **配置来源**： ${{ env.CONFIG_URL || '默认远程' }}
+            - **diy 脚本**： ${{ env.DIY_URL || '本地 diy.sh（若存在）' }}
+            - **Passwall**： Openwrt-Passwall/openwrt-passwall (sparse checkout)
 
-            固件及说明文件位于下方 **Assets**
-          files: lede/bin/targets/**/*
+            **下载说明**：
+            • 直接固件文件（.img / .bin / .squashfs 等） → 可直接用于刷机
+            • firmware-full-*.zip → 完整 targets 目录打包（包含所有型号 + 说明.txt）
+
+          files: |
+            lede/bin/targets/**/*
+            lede/firmware-full-*.zip
           draft: false
           prerelease: false
