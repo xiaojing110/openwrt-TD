@@ -16,7 +16,11 @@ on:
         required: false
         default: '10.0.0.1'
       config_url:
-        description: '自定义 .config 地址（或 diy.sh 远程地址，以 .sh 结尾优先当作 diy 脚本执行）'
+        description: '自定义 .config 文件下载地址（优先级最高）'
+        required: false
+        default: ''
+      diy_url:
+        description: '远程 diy 脚本地址（.sh 文件，会在 feeds 更新后、passwall 替换前执行）'
         required: false
         default: ''
 
@@ -26,7 +30,8 @@ env:
   LAN_IP: ${{ github.event.inputs.lan_ip || '10.0.0.1' }}
   SOURCE: ${{ github.event.inputs.source || 'lede' }}
   CONFIG_URL: ${{ github.event.inputs.config_url || '' }}
-  BUILD_AUTHOR: ${{ github.repository_owner }}   # 默认使用仓库拥有者用户名
+  DIY_URL:    ${{ github.event.inputs.diy_url    || '' }}
+  BUILD_AUTHOR: ${{ github.repository_owner }}
 
 jobs:
   build:
@@ -41,19 +46,34 @@ jobs:
           ref: main
           fetch-depth: 1
 
+      - name: 显示调试信息
+        run: |
+          echo "当前分支: $(git branch --show-current)"
+          ls -la
+          find . -maxdepth 3 -type f \( -name ".config" -o -name "diy.sh" \) || true
+
       - name: 设置时区
         run: sudo timedatectl set-timezone "${TZ}"
 
       - name: 安装编译依赖
         run: |
           sudo apt update -y && sudo apt full-upgrade -y
-          sudo apt install -y build-essential clang flex bison gawk gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget curl subversion vim
+          sudo apt install -y \
+            build-essential clang flex bison gawk gcc-multilib g++-multilib gettext \
+            git subversion unzip zlib1g-dev libncurses5-dev libssl-dev python3 \
+            rsync wget curl vim patch ccache ecj fastjar file mkisofs \
+            xsltproc quilt libglib2.0-dev libelf-dev autoconf automake libtool \
+            autopoint device-tree-compiler gperf haveged help2man intltool \
+            pkgconf python3-setuptools python3-dev rsync swig time unzip xz-utils \
+            zlib1g-dev
           sudo apt clean
 
       - name: 最大化构建空间
         uses: easimon/maximize-build-space@master
         with:
           swap-size-mb: 2048
+          remove-dotnet: 'true'
+          remove-android: 'true'
 
       - name: 克隆源码
         run: |
@@ -63,67 +83,86 @@ jobs:
             git clone --depth=1 https://github.com/coolsnowwolf/lede.git lede
           fi
 
-      - name: 更新 feeds
+      - name: 更新并安装 feeds
         working-directory: ./lede
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: 执行 diy（支持远程 .sh 或本地 diy.sh）
+      - name: 执行 diy 脚本（优先远程 diy_url，其次本地 diy.sh）
         run: |
           cd lede
-          DIY_EXECUTED=false
-          if [[ "${{ env.CONFIG_URL }}" == *.sh ]] && [[ -n "${{ env.CONFIG_URL }}" ]]; then
-            echo "执行远程 diy 脚本"
-            wget -O diy.sh "${{ env.CONFIG_URL }}" || exit 1
-            chmod +x diy.sh
-            bash diy.sh
-            DIY_EXECUTED=true
-            rm -f diy.sh
-          fi
-          if [ "$DIY_EXECUTED" = "false" ] && [ -f "../diy.sh" ]; then
+          DIY_STATUS="未执行"
+
+          if [ -n "${{ env.DIY_URL }}" ]; then
+            echo "执行远程 diy 脚本: ${{ env.DIY_URL }}"
+            wget -O diy-temp.sh "${{ env.DIY_URL }}" || { echo "远程 diy 下载失败"; exit 1; }
+            chmod +x diy-temp.sh
+            bash ./diy-temp.sh && DIY_STATUS="远程 diy_url 执行成功" || DIY_STATUS="远程 diy 执行失败但继续"
+            rm -f diy-temp.sh
+          elif [ -f "../diy.sh" ]; then
             echo "执行本地 diy.sh"
             cp ../diy.sh .
             chmod +x diy.sh
-            bash diy.sh
-            DIY_EXECUTED=true
+            bash ./diy.sh && DIY_STATUS="本地 diy.sh 执行成功" || DIY_STATUS="本地 diy 执行失败但继续"
+            rm -f diy.sh
+          else
+            DIY_STATUS="无 diy 脚本"
           fi
-          echo "diy 执行状态: $DIY_EXECUTED"
+
+          echo "DIY 状态: $DIY_STATUS"
 
       - name: 加载 .config
         working-directory: ./lede
         run: |
-          if [[ "${{ env.CONFIG_URL }}" != *.sh ]] && [ -n "${{ env.CONFIG_URL }}" ]; then
+          if [ -n "${{ env.CONFIG_URL }}" ]; then
+            echo "下载用户指定的 .config: ${{ env.CONFIG_URL }}"
             wget -O .config "${{ env.CONFIG_URL }}" || exit 1
           elif [ -f "../.config" ]; then
-            cp ../.config .config
+            cp -fv "../.config" .config
           elif [ -f "../X86/.config" ]; then
-            cp ../X86/.config .config
+            cp -fv "../X86/.config" .config
           else
+            echo "使用默认远程 config"
             wget -O .config "${{ env.REMOTE_CONFIG_URL }}" || exit 1
           fi
+
+          if [ ! -s .config ]; then
+            echo "错误：.config 文件为空"
+            exit 1
+          fi
+
           make defconfig
 
       - name: 替换最新 luci-app-passwall
         working-directory: ./lede/feeds/luci/applications
         run: |
           rm -rf luci-app-passwall 2>/dev/null || true
-          git clone --depth=1 https://github.com/xiaorouji/openwrt-passwall.git temp-passwall
-          mv temp-passwall/luci-app-passwall .
-          rm -rf temp-passwall
+          git clone --depth=1 https://github.com/xiaorouji/openwrt-passwall.git temp
+          mv temp/luci-app-passwall .
+          rm -rf temp
 
-      - name: 修改 LAN IP & 主题
+      - name: 修改默认 LAN IP & 强制使用 Argon 主题
         working-directory: ./lede
         run: |
           sed -i "s/192.168.1.1/${{ env.LAN_IP }}/g" package/base-files/files/bin/config_generate
-          PREFIX=$(echo "${{ env.LAN_IP }}" | cut -d. -f1-3)
-          sed -i "s/192.168.1./${PREFIX}./g" package/base-files/files/bin/config_generate
+          PREFIX_3=$(echo "${{ env.LAN_IP }}" | cut -d. -f1-3).
+          sed -i "s/192.168.1./${PREFIX_3}/g" package/base-files/files/bin/config_generate
 
-          # 强制 argon 主题（如果有多个主题集合）
-          find feeds/luci/ -type f -name Makefile -exec sed -i 's/luci-theme-bootstrap/luci-theme-argon/g' {} \;
-          find feeds/luci/ -type f -name Makefile -exec sed -i 's/luci-theme-material/luci-theme-argon/g' {} \;
+          # 强制 Argon 主题
+          sed -i 's/luci-theme-bootstrap/luci-theme-argon/g' feeds/luci/collections/*/Makefile || true
+          sed -i 's/luci-theme-material/luci-theme-argon/g' feeds/luci/collections/*/Makefile || true
 
-      - name: 编译固件
+      - name: 缓存下载文件和工具链
+        uses: actions/cache@v4
+        with:
+          path: |
+            lede/dl
+            lede/staging_dir
+          key: ${{ runner.os }}-openwrt-${{ hashFiles('lede/.config') }}
+          restore-keys: ${{ runner.os }}-openwrt-
+
+      - name: 下载依赖 & 编译
         working-directory: ./lede
         env:
           FORCE_UNSAFE_CONFIGURE: 1
@@ -131,22 +170,22 @@ jobs:
           make download -j$(nproc) || make download -j1 V=s
           make -j$(nproc) V=s || make -j1 V=s
 
-      - name: 生成固件说明文件（包含编译完成时间）
+      - name: 生成固件说明文件
         working-directory: ./lede
         run: |
           TARGET_DIR=$(find bin/targets -mindepth 2 -maxdepth 3 -type d 2>/dev/null | head -n1)
-          [ -z "$TARGET_DIR" ] && TARGET_DIR="bin/targets/x86/64" && mkdir -p "$TARGET_DIR"
+          [ -z "$TARGET_DIR" ] && mkdir -p bin/targets/x86/64 && TARGET_DIR="bin/targets/x86/64"
 
-          cat > "$TARGET_DIR/固件说明.txt" << 'EOF'
+          cat > "$TARGET_DIR/固件说明.txt" << EOF
           ==================== 固件信息 ====================
           固件来源     : ${{ env.SOURCE }}
           编译完成时间 : $(date '+%Y-%m-%d %H:%M:%S %Z')  (Asia/Shanghai)
           后台地址     : http://${{ env.LAN_IP }}
-          用户/密码    : root / password
+          用户/密码     : root / password
           作者/维护者   : ${{ env.BUILD_AUTHOR }}
           config 来源   : ${{ env.CONFIG_URL || env.REMOTE_CONFIG_URL }}
-          diy 执行     : ${{ (env.CONFIG_URL != '' && contains(env.CONFIG_URL, '.sh')) && '远程 diy.sh' || (github.event.inputs.config_url == '' && '本地 diy.sh（若存在）') || '无 diy 执行' }}
-          Passwall 来源 : 最新 xiaorouji/openwrt-passwall
+          diy 来源      : ${{ env.DIY_URL || '本地 diy.sh（若存在）' || '无 diy' }}
+          Passwall      : 最新版 xiaorouji/openwrt-passwall
           ================================================
           EOF
 
@@ -161,22 +200,23 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ env.SOURCE }}-${{ github.run_number }}
-          name: ${{ env.SOURCE }}固件 - ${{ env.LAN_IP }} - ${{ github.run_number }}
+          name: ${{ env.SOURCE }} 固件 - ${{ env.LAN_IP }} - ${{ github.run_number }}
           body: |
             ### 固件构建信息
 
             - **固件来源**： ${{ env.SOURCE }}
             - **LAN IP**： ${{ env.LAN_IP }}
-            - **编译完成时间**： $(date '+%Y-%m-%d %H:%M:%S %Z') （Asia/Shanghai）
+            - **编译完成时间**： $(date '+%Y-%m-%d %H:%M:%S %Z') (Asia/Shanghai)
             - **作者/维护者**： ${{ env.BUILD_AUTHOR }}
-            - **配置文件来源**：
-              - 用户输入： ${{ env.CONFIG_URL || '未提供，使用默认' }}
+            - **配置来源**：
+              - 用户 config_url： ${{ env.CONFIG_URL || '未提供，使用默认远程' }}
               - 默认远程： ${{ env.REMOTE_CONFIG_URL }}
-            - **diy 支持**： 支持远程 .sh 脚本 或 本地 diy.sh（feeds update 后、passwall 替换后执行）
+            - **diy 脚本**：
+              - 远程 diy_url： ${{ env.DIY_URL || '未提供' }}
+              - 本地 diy.sh： ${{ (env.DIY_URL == '') && '若仓库存在则执行' || '被远程 diy_url 覆盖' }}
             - **Passwall**： 使用最新版 xiaorouji/openwrt-passwall
-            - **说明文件**： 已包含在固件目录中（固件说明.txt）
 
-            固件下载路径见下方 Assets
+            固件文件位于下方 **Assets** 中
           files: lede/bin/targets/**/*
           draft: false
           prerelease: false
