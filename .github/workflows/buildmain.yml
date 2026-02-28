@@ -134,13 +134,18 @@ jobs:
 
           make defconfig
 
-      - name: 替换最新 luci-app-passwall
+        - name: 替换 luci-app-passwall（稀疏检出最新版）
         working-directory: ./lede/feeds/luci/applications
         run: |
-          rm -rf luci-app-passwall 2>/dev/null || true
-          git clone --depth=1 https://github.com/xiaorouji/openwrt-passwall.git temp
-          mv temp/luci-app-passwall .
-          rm -rf temp
+          rm -rf luci-app-passwall || true
+          git clone --depth=1 https://github.com/Openwrt-Passwall/openwrt-passwall.git temp-passwall
+          cd temp-passwall
+          git sparse-checkout init --cone
+          git sparse-checkout set luci-app-passwall
+          git checkout
+          mv luci-app-passwall ../../
+          cd ..
+          rm -rf temp-passwall
 
       - name: 修改默认 LAN IP & 强制使用 Argon 主题
         working-directory: ./lede
