@@ -5,6 +5,9 @@
 #echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> feeds.conf.default
 #echo "src-git small https://github.com/kenzok8/small" >> feeds.conf.default
 
+echo "修改 连接数限制"
+echo "net.netfilter.nf_conntrack_max = 655535" >> package/base-files/files/etc/sysctl.conf
+
 ##下面内容仅在需要时启用，目前是旧版本后续配置为diy2.sh
 ##自发布时最新版
 echo "更新sing-box"
