@@ -34,11 +34,11 @@ sed -i -E 's/(PKG_VERSION:=)[^ ]+/\1 2.2.7.5/' feeds/packages/net/v2raya/Makefil
 sed -i -E 's|(PKG_HASH:=)[^ ]+|\1 d0daccace51572d730fb710f7df190beed47d51ec1091d2fba38719b9417b385|' feeds/packages/net/v2raya/Makefile
 
 # 修改 haproxy 包中的 PKG_VERSION 和 PKG_HASH ##暂时调式用
-echo "更新haproxy"
+#echo "更新haproxy"
 # 自动识别并替换 PKG_VERSION 和 PKG_HASH
-sed -i -E 's/(PKG_VERSION:=)[^ ]+/\1 3.2.12/' feeds/packages/net/haproxy/Makefile
-sed -i -E 's/(PKG_SOURCE_URL:=)[^ ]+/\1 https://www.haproxy.org/download/3.2/src/' feeds/packages/net/haproxy/Makefile
-sed -i -E 's|(PKG_HASH:=)[^ ]+|\1 310b424e60db2f3990206ca7c81293586842cb628e7dfad572c7146ae9e95a91|' feeds/packages/net/haproxy/Makefile
+#sed -i -E 's/(PKG_VERSION:=)[^ ]+/\1 3.2.12/' feeds/packages/net/haproxy/Makefile
+#sed -i -E 's/(PKG_SOURCE_URL:=)[^ ]+/\1 https://www.haproxy.org/download/3.2/src/' feeds/packages/net/haproxy/Makefile
+#sed -i -E 's|(PKG_HASH:=)[^ ]+|\1 310b424e60db2f3990206ca7c81293586842cb628e7dfad572c7146ae9e95a91|' feeds/packages/net/haproxy/Makefile
 
 # 修改 tools工具7z 包中的 PKG_VERSION 和 PKG_HASH
 echo "更新7z"
