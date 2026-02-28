@@ -215,9 +215,9 @@ jobs:
       - name: 打包完整 bin 目录为 zip
         working-directory: ./lede
         run: |
-          ZIP_NAME="firmware-full-${{ env.SOURCE }}-${{ github.run_number }}.zip"
+          ZIP_NAME="firmware-full-bin-${{ env.SOURCE }}-${{ github.run_number }}.zip"
           cd bin
-          zip -r "../${ZIP_NAME}" /
+          zip -r -9 "../${ZIP_NAME}" .
           cd ..
           ls -lh "${ZIP_NAME}" || true
 
@@ -235,24 +235,23 @@ jobs:
             - **作者/维护者**： ${{ env.BUILD_AUTHOR }}
             - **配置来源**： ${{ env.CONFIG_URL || '默认远程' }}
             - **diy 脚本**： ${{ env.DIY_URL || '本地 diy.sh（若存在）' }}
-            - **Passwall**： Openwrt-Passwall/openwrt-passwall (sparse checkout)
 
             **已上传内容说明**：
             • 系统固件文件（.img / .bin / .squashfs / .vdi / .vmdk / .ova 等）
             • 固件说明.txt
-            • firmware-full-*.zip（完整 targets 目录打包，包含所有文件结构）
+            • firmware-full-bin-*.zip → 完整 bin 目录打包（包含 targets/、packages/ 等所有子目录）
 
             **不包含**：.ipk / .apk 等软件包文件
 
           files: |
             lede/bin/targets/**/*.img
+            lede/bin/targets/**/*.img.gz
             lede/bin/targets/**/*.bin
             lede/bin/targets/**/*.squashfs
             lede/bin/targets/**/*.vdi
             lede/bin/targets/**/*.vmdk
             lede/bin/targets/**/*.ova
-            lede/bin/targets/**/*.img.gz
             lede/bin/targets/**/固件说明.txt
-            lede/firmware-full-*.zip
+            lede/firmware-full-bin-*.zip
           draft: false
           prerelease: false
