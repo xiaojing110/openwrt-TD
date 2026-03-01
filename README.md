@@ -1,7 +1,22 @@
 # openwrt-TD
 自动编译openwrt-可用于immortalwrt，lede，原版openwrt等
-在x86目录下上传本地编译的.config文件，确保所需插件等源代码中有，或者修改yml文件配置，暂时未加调用diy文件
-编译MTK时请启用MTK头文件补丁(lede固件),MTK机型会自动编译双内核版本，同时支持远程调用diy.sh,适配更多玩法
+
+在x86目录下上传本地编译的.config文件，确保所需插件等源代码中有，或者修改yml文件配置
+
+请确保在config配置编译通过，本地无法通过，那么actions也无法通过
+
+immortalwrt的编译请选择你自己的config配置，默认仓库配置为LEDE固件
+
+支持远程调用diy.sh,适配更多玩法
+
+immortalwrt固件使用默认自定义diy可能不会生效,请另外生成一份适配immortalwrt的diy配置文件
+
+此编译完全匹配本地编译方式方法
+
 仅限自用，还在完善
 
+待完成功能
+可能会开启ssh在线构建
+
+觉得好用可以点点star
 源码来自:https://github.com/coolsnowwolf/lede
