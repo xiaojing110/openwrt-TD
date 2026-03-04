@@ -83,10 +83,15 @@ jobs:
           else
             git clone --depth=1 https://github.com/coolsnowwolf/lede.git lede
           fi
-      - name: 修改 feeds.conf.default（可选）
+      - name: 修改 feeds.conf.default（仅 lede 使用 coolsnowwolf/luci openwrt-25.12 分支）
         working-directory: ./lede
+        if: env.SOURCE == 'lede'
         run: |
           sed -i '/^src-git luci/c\src-git luci https://github.com/coolsnowwolf/luci.git;openwrt-25.12' feeds.conf.default || true
+
+      - name: 修改 feeds.conf.default（通用部分：qmodem + mosdns）
+        working-directory: ./lede
+        run: |
           sed -i 's/^#src-git qmodem/src-git qmodem/' feeds.conf.default || true
           echo "src-git mosdns https://github.com/sbwml/luci-app-mosdns.git" >> feeds.conf.default || true
       - name: 更新并安装 feeds
