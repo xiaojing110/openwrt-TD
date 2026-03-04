@@ -33,6 +33,13 @@ echo "更新v2raya"
 sed -i -E 's/(PKG_VERSION:=)[^ ]+/\1 2.2.7.5/' feeds/packages/net/v2raya/Makefile
 sed -i -E 's|(PKG_HASH:=)[^ ]+|\1 d0daccace51572d730fb710f7df190beed47d51ec1091d2fba38719b9417b385|' feeds/packages/net/v2raya/Makefile
 
+# 修改 golang 包中的 PKG_VERSION 和 PKG_HASH
+echo "更新golang"
+sed -i 's/GO_VERSION_MAJOR_MINOR:=.*/GO_VERSION_MAJOR_MINOR:=1.26/' feeds/packages/lang/golang/golang/Makefile
+sed -i 's/GO_VERSION_PATCH:=.*/GO_VERSION_PATCH:=0/' feeds/packages/lang/golang/golang/Makefile
+sed -i 's/PKG_HASH:=.*/PKG_HASH:=c9132a8a1f6bd2aa4aad1d74b8231d95274950483a4950657ee6c56e6e817790/' feeds/packages/lang/golang/golang/Makefile
+echo "已强制 golang 到 1.26.0"
+
 # 修改 haproxy 包中的 PKG_VERSION 和 PKG_HASH ##暂时调式用
 #echo "更新haproxy"
 # 自动识别并替换 PKG_VERSION 和 PKG_HASH
