@@ -1,0 +1,256 @@
+name: 构建 LEDE / ImmortalWrt 固件2
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: '选择编译源码（lede 或 immortalwrt 或 mt798x-closed）'
+        required: true
+        default: 'lede'
+        type: choice
+        options:
+          - lede
+          - immortalwrt
+          - mt798x-closed   # 新增：闭源优化版，仅适合 MT798x 机型
+      lan_ip:
+        description: '自定义后台 LAN IP（例如 192.168.5.1 或 10.0.0.1）'
+        required: false
+        default: '10.0.0.1'
+      config_url:
+        description: '自定义 .config 文件下载地址（优先级最高）'
+        required: false
+        default: ''
+      diy_url:
+        description: '远程 diy 脚本地址（.sh 文件，会在 feeds 更新后、passwall 替换前执行）'
+        required: false
+        default: ''
+env:
+  TZ: Asia/Shanghai
+  REMOTE_CONFIG_URL: "https://raw.githubusercontent.com/xiaojing110/openwrt-TD/main/X86/.config"
+  LAN_IP: ${{ github.event.inputs.lan_ip || '10.0.0.1' }}
+  SOURCE: ${{ github.event.inputs.source || 'lede' }}
+  CONFIG_URL: ${{ github.event.inputs.config_url || '' }}
+  DIY_URL: ${{ github.event.inputs.diy_url || '' }}
+  BUILD_AUTHOR: ${{ github.repository_owner }}
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: 检出仓库代码
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+      - name: 显示调试信息
+        run: |
+          echo "当前分支: $(git branch --show-current || echo '未知')"
+          ls -la
+          find . -maxdepth 3 -type f \( -name ".config" -o -name "diy.sh" \) || true
+      - name: 设置时区
+        run: sudo timedatectl set-timezone "${TZ}"
+      - name: 安装编译依赖
+        run: |
+          sudo apt update -y && sudo apt full-upgrade -y
+          sudo apt install -y \
+            ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
+            bzip2 ccache clang cmake cpio curl device-tree-compiler flex gawk gcc-multilib \
+            g++-multilib gettext genisoimage git gperf haveged help2man intltool \
+            libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev \
+            libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev \
+            libreadline-dev libssl-dev libtool llvm lrzsz libnsl-dev ninja-build p7zip \
+            p7zip-full patch pkgconf python3 python3-pyelftools python3-setuptools \
+            qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs \
+            upx-ucl unzip vim wget xmlto xxd zlib1g-dev zip
+          sudo apt clean
+      - name: 最大化构建空间
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 512
+          swap-size-mb: 2048
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+      - name: 克隆源码
+        run: |
+          if [ "${{ env.SOURCE }}" = "immortalwrt" ]; then
+            git clone --depth=1 https://github.com/immortalwrt/immortalwrt.git lede
+          elif [ "${{ env.SOURCE }}" = "mt798x-closed" ]; then
+            echo "⚠️ 使用闭源优化版 (padavanonly/immortalwrt-mt798x-6.6) - 仅适合 MT798x 机型（如 AX3000/AX6000）"
+            git clone --depth=1 -b openwrt-24.10-6.6 https://github.com/padavanonly/immortalwrt-mt798x-6.6.git lede
+          else
+            git clone --depth=1 https://github.com/coolsnowwolf/lede.git lede
+          fi
+      - name: 修改 feeds.conf.default（可选）
+        working-directory: ./lede
+        run: |
+          sed -i '/^src-git luci/c\src-git luci https://github.com/coolsnowwolf/luci.git;openwrt-25.12' feeds.conf.default || true
+          sed -i 's/^#src-git qmodem/src-git qmodem/' feeds.conf.default || true
+          echo "src-git mosdns https://github.com/sbwml/luci-app-mosdns.git" >> feeds.conf.default || true
+      - name: 更新并安装 feeds
+        working-directory: ./lede
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a -f
+      - name: 执行 diy 脚本（优先远程 diy_url，其次本地 diy.sh）
+        run: |
+          cd lede
+          DIY_STATUS="未执行"
+          if [ -n "${{ env.DIY_URL }}" ]; then
+            echo "执行远程 diy 脚本: ${{ env.DIY_URL }}"
+            wget -O diy-temp.sh "${{ env.DIY_URL }}" || { echo "远程 diy 下载失败"; exit 1; }
+            chmod +x diy-temp.sh
+            bash ./diy-temp.sh && DIY_STATUS="远程 diy_url 执行成功" || DIY_STATUS="远程 diy 执行失败但继续"
+            rm -f diy-temp.sh
+          elif [ -f "../diy.sh" ]; then
+            echo "执行本地 diy.sh"
+            cp ../diy.sh .
+            chmod +x diy.sh
+            bash ./diy.sh && DIY_STATUS="本地 diy.sh 执行成功" || DIY_STATUS="本地 diy 执行失败但继续"
+            rm -f diy.sh
+          else
+            DIY_STATUS="无 diy 脚本"
+          fi
+          echo "DIY 状态: $DIY_STATUS"
+      - name: 加载 .config
+        working-directory: ./lede
+        run: |
+          if [ -n "${{ env.CONFIG_URL }}" ]; then
+            echo "下载用户指定的 .config: ${{ env.CONFIG_URL }}"
+            wget -O .config "${{ env.CONFIG_URL }}" || exit 1
+          elif [ "${{ env.SOURCE }}" = "mt798x-closed" ]; then
+            echo "mt798x-closed 模式：无用户 config_url，使用仓库默认 mt7981-ax3000 示例（可手动指定 config_url 覆盖，如 mt7986-ax6000）"
+            if [ -f "defconfig/mt7981-ax3000.config" ]; then
+              cp -f defconfig/mt7981-ax3000.config .config
+            else
+              wget -O .config "${{ env.REMOTE_CONFIG_URL }}" || exit 1
+            fi
+          elif [ -f "../.config" ]; then
+            cp -fv "../.config" .config
+          elif [ -f "../X86/.config" ]; then
+            cp -fv "../X86/.config" .config
+          else
+            echo "使用默认远程 config"
+            wget -O .config "${{ env.REMOTE_CONFIG_URL }}" || exit 1
+          fi
+          if [ ! -s .config ]; then
+            echo "错误：.config 文件为空或下载失败"
+            exit 1
+          fi
+          make defconfig
+      - name: 替换 luci-app-passwall（sparse checkout）
+        working-directory: ./lede/feeds/luci/applications
+        run: |
+          rm -rf luci-app-passwall || true
+          git clone --depth=1 https://github.com/Openwrt-Passwall/openwrt-passwall.git temp-passwall
+          cd temp-passwall
+          git sparse-checkout init --cone
+          git sparse-checkout set luci-app-passwall
+          git checkout
+          mv luci-app-passwall ../../
+          cd ..
+          rm -rf temp-passwall
+      - name: 应用自定义修改（LAN IP + 强制 Argon 主题）
+        working-directory: ./lede
+        run: |
+          sed -i "s/192.168.1.1/${{ env.LAN_IP }}/g" package/base-files/files/bin/config_generate
+          PREFIX_3=$(echo "${{ env.LAN_IP }}" | cut -d. -f1-3).
+          PREFIX_2=$(echo "${{ env.LAN_IP }}" | cut -d. -f1-2).
+          sed -i "s/192.168.1./${PREFIX_3}/g" package/base-files/files/bin/config_generate
+          sed -i "s/192.168./${PREFIX_2}/g" package/base-files/files/bin/config_generate
+          find feeds/luci/collections/ -type f -name Makefile -exec \
+            sed -i -E 's/(luci-theme-)[a-zA-Z0-9_-]+/\1argon/g' {} \;
+      - name: 缓存下载文件和工具链
+        uses: actions/cache@v4
+        with:
+          path: |
+            lede/dl
+            lede/staging_dir
+          key: ${{ runner.os }}-lede-build-${{ hashFiles('lede/.config') }}
+          restore-keys: ${{ runner.os }}-lede-build-
+      - name: 下载依赖包
+        working-directory: ./lede
+        run: |
+          make download -j$(nproc) || make download -j1 V=s
+      - name: 编译固件
+        working-directory: ./lede
+        env:
+          FORCE_UNSAFE_CONFIGURE: 1
+        run: |
+          make -j$(nproc) V=s || make -j1 V=s
+      - name: 生成固件说明文件
+        working-directory: ./lede
+        run: |
+          TARGET_DIR=$(find bin/targets -mindepth 2 -maxdepth 3 -type d 2>/dev/null | head -n1)
+          [ -z "$TARGET_DIR" ] && mkdir -p "bin/targets/x86/64" && TARGET_DIR="bin/targets/x86/64"
+          cat > "$TARGET_DIR/固件说明.txt" << EOF
+          ==================== 固件信息 ====================
+          固件来源 : ${{ env.SOURCE }} （mt798x-closed 为闭源优化版，仅限 MT798x 机型，含部分 MediaTek 闭源驱动/HNAT/无线补丁）
+          编译完成时间 : $(date '+%Y-%m-%d %H:%M:%S %Z') (Asia/Shanghai)
+          后台地址 : http://${{ env.LAN_IP }}
+          用户名/密码 : root / password
+          作者/维护者 : ${{ env.BUILD_AUTHOR }}
+          config 来源 : ${{ env.CONFIG_URL || env.REMOTE_CONFIG_URL }}
+          diy 来源 : ${{ env.DIY_URL || '本地 diy.sh（若存在）' || '无 diy' }}
+          Passwall 来源 : Openwrt-Passwall/openwrt-passwall (sparse checkout)
+          ================================================
+          EOF
+      - name: 打包 bin 目录为 zip（只包含 .ipk / .apk 等，排除固件镜像）
+        working-directory: ./lede
+        run: |
+          ZIP_NAME="packages-ipk-apk-${{ env.SOURCE }}-${{ github.run_number }}.zip"
+         
+          cd bin
+         
+          # 使用 -x 排除常见固件文件后缀
+          zip -r -9 "../${ZIP_NAME}" . \
+            -x "targets/*/*.img" \
+            -x "targets/*/*.img.gz" \
+            -x "targets/*/*.bin" \
+            -x "targets/*/*.squashfs" \
+            -x "targets/*/*.vdi" \
+            -x "targets/*/*.vmdk" \
+            -x "targets/*/*.ova" \
+            -x "targets/*/*.gz" \
+            -x "targets/*/*.xz" \
+            -x "targets/*/*.tar.gz" \
+            -x "targets/*/profiles.json" \
+            -x "targets/*/sha256sums" \
+            || true
+         
+          cd ..
+          ls -lh "${ZIP_NAME}" || true
+          # 调试：查看 zip 内容前 20 行
+          unzip -l "${ZIP_NAME}" | head -n 20 || true
+      - name: 发布到 GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ env.SOURCE }}-${{ github.run_number }}
+          name: ${{ env.SOURCE }} 固件 - ${{ env.LAN_IP }} - ${{ github.run_number }}
+          body: |
+            ### 固件构建信息
+            - **固件来源**： ${{ env.SOURCE }} （若为 mt798x-closed，则为闭源优化版，仅适合 MT798x 机型）
+            - **LAN IP**： ${{ env.LAN_IP }}
+            - **编译完成时间**： $(date '+%Y-%m-%d %H:%M:%S %Z') (Asia/Shanghai)
+            - **作者/维护者**： ${{ env.BUILD_AUTHOR }}
+            - **配置来源**： ${{ env.CONFIG_URL || '默认远程' }}
+            - **diy 脚本**： ${{ env.DIY_URL || '本地 diy.sh（若存在）' }}
+            **已上传内容**：
+            • 系统固件镜像（.img / .bin / .squashfs / .vdi / .vmdk / .ova 等） → 用于刷机
+            • 固件说明.txt
+            • packages-ipk-apk-*.zip → 只包含 .ipk / .apk 等软件包（已排除所有固件镜像文件）
+            **注意**：zip 文件不包含任何系统固件镜像，仅供需要软件包的用户下载
+          files: |
+            lede/bin/targets/**/*.img
+            lede/bin/targets/**/*.img.gz
+            lede/bin/targets/**/*.bin
+            lede/bin/targets/**/*.squashfs
+            lede/bin/targets/**/*.vdi
+            lede/bin/targets/**/*.vmdk
+            lede/bin/targets/**/*.ova
+            lede/bin/targets/**/固件说明.txt
+            lede/packages-ipk-apk-*.zip
+          draft: false
+          prerelease: false
