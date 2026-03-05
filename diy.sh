@@ -33,13 +33,6 @@ echo "更新v2raya"
 sed -i -E 's/(PKG_VERSION:=)[^ ]+/\1 2.2.7.5/' feeds/packages/net/v2raya/Makefile
 sed -i -E 's|(PKG_HASH:=)[^ ]+|\1 d0daccace51572d730fb710f7df190beed47d51ec1091d2fba38719b9417b385|' feeds/packages/net/v2raya/Makefile
 
-# 修改 golang 包中的 PKG_VERSION 和 PKG_HASH
-echo "更新golang"
-sed -i 's/GO_VERSION_MAJOR_MINOR:=.*/GO_VERSION_MAJOR_MINOR:=1.26/' feeds/packages/lang/golang/golang/Makefile
-sed -i 's/GO_VERSION_PATCH:=.*/GO_VERSION_PATCH:=0/' feeds/packages/lang/golang/golang/Makefile
-sed -i 's/PKG_HASH:=.*/PKG_HASH:=c9132a8a1f6bd2aa4aad1d74b8231d95274950483a4950657ee6c56e6e817790/' feeds/packages/lang/golang/golang/Makefile
-echo "已强制 golang 到 1.26.0"
-
 # 修改 haproxy 包中的 PKG_VERSION 和 PKG_HASH ##暂时调式用
 #echo "更新haproxy"
 # 自动识别并替换 PKG_VERSION 和 PKG_HASH
@@ -65,9 +58,9 @@ sed -i -E 's|(PKG_HASH:=)[^ ]+|\1 959496928c8a676ec8377f665ff6a19a707bfad693325f
 #sed -i 's|LINUX_KERNEL_HASH-6.6.*|LINUX_KERNEL_HASH-6.6.89 = c21af7d36068e4ac0704c242eac8459212e6bf4a5d09df941b9b4d17dc1eba00|' include/kernel-6.6
 
 #6.12 内核
-# echo "更新 kernel-6.12内核"
-# sed -i 's|LINUX_VERSION-6.12 = .*|LINUX_VERSION-6.12 = .41|' include/kernel-6.12
-# sed -i 's|LINUX_KERNEL_HASH-6.12.*|LINUX_KERNEL_HASH-6.12.41 = 6b19a3ae99423de2416964d67251d745910277af258b4c4c63e88fd87dbf0e27|' include/kernel-6.12
+echo "更新 kernel-6.12内核"
+sed -i 's|LINUX_VERSION-6.12 = .*|LINUX_VERSION-6.12 = .75|' include/kernel-6.12
+sed -i 's|LINUX_KERNEL_HASH-6.12.*|LINUX_KERNEL_HASH-6.12.75 = 06ee7927556ff1aa8810c4826501b0fdb169ebdc180644b882cf7c143ac1c177|' include/kernel-6.12
 
 # 修改 linux-firmware Makefile 中的 PKG_VERSION 和 PKG_HASH
 #echo "更新linux-firmware"
