@@ -163,7 +163,7 @@ jobs:
         working-directory: ./feeds/luci/applications
         run: |
           rm -rf luci-app-passwall || true
-          git clone --depth=1 https://github.com/Openwrt-Passwall/openwrt-passwall.git temp-passwall
+          git clone --depth=1 --single-branch https://github.com/Openwrt-Passwall/openwrt-passwall.git temp-passwall
           cd temp-passwall
           git sparse-checkout init --cone
           git sparse-checkout set luci-app-passwall
