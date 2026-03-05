@@ -160,7 +160,7 @@ jobs:
           make defconfig
 
       - name: 替换 luci-app-passwall（sparse checkout）
-        working-directory: ./lede/feeds/luci/applications
+        working-directory: ./feeds/luci/applications
         run: |
           rm -rf luci-app-passwall || true
           git clone --depth=1 https://github.com/Openwrt-Passwall/openwrt-passwall.git temp-passwall
