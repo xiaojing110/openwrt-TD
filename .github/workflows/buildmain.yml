@@ -112,7 +112,18 @@ jobs:
         run: |
           sed -i 's/^#src-git qmodem/src-git qmodem/' feeds.conf.default || true
           echo "src-git mosdns https://github.com/sbwml/luci-app-mosdns.git" >> feeds.conf.default || true
-
+          
+      - name: 添加 Passwall feeds（官方推荐方式）
+        working-directory: ./${{ env.REAL_DIR }}
+        run: |
+          # Passwall 主仓库（luci 界面）
+          echo "src-git passwall https://github.com/Openwrt-Passwall/openwrt-passwall.git;main" >> feeds.conf.default
+          
+          # Passwall 依赖包仓库（非常重要！xray、sing-box、iptables 等）
+          #echo "src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git;main" >> feeds.conf.default
+          
+          echo "已添加 Passwall feeds 到 feeds.conf.default"
+          cat feeds.conf.default | grep passwall
       - name: 更新并安装 feeds
         working-directory: ./${{ env.REAL_DIR }}
         run: |
@@ -194,14 +205,6 @@ jobs:
         working-directory: ./${{ env.REAL_DIR }}/feeds/luci/applications
         run: |
           rm -rf luci-app-passwall || true
-          git clone --depth=1 --single-branch https://github.com/Openwrt-Passwall/openwrt-passwall.git temp-passwall
-          cd temp-passwall
-          git sparse-checkout init --cone
-          git sparse-checkout set luci-app-passwall
-          git checkout
-          mv luci-app-passwall ../../
-          cd ..
-          rm -rf temp-passwall
 
       - name: mt798x-closed 模式 - 替换 golang 到 1.26 分支
         if: env.SOURCE == 'mt798x-closed'
@@ -249,27 +252,6 @@ jobs:
         run: |
           make -j$(nproc) V=s || make -j1 V=s
 
-      - name: 收集已选 luci-app 信息
-        working-directory: ./${{ env.REAL_DIR }}
-        run: |
-          APPS=""
-          for pkg in passwall openclash mosdns helloworld luci-app-ssr-plus luci-app-vssr \
-                     luci-app-bypass luci-app-alist luci-app-homeproxy luci-app-linkease \
-                     luci-app-filebrowser luci-app-diskman luci-app-ddnsto luci-app-aliddns; do
-            if grep -q "CONFIG_PACKAGE_${pkg}=y" .config 2>/dev/null || [ -d "feeds/luci/applications/${pkg}" ]; then
-              VER=$(grep '^PKG_VERSION' feeds/*/applications/${pkg}/Makefile 2>/dev/null | head -1 | cut -d= -f2- | xargs || echo "unknown")
-              [ -z "$VER" ] && VER="已启用"
-              APPS="$APPS- ${pkg} (${VER})\n"
-            fi
-          done
-          
-          if [ -z "$APPS" ]; then
-            APPS="未检测到常见 luci-app（或未在 .config 中启用）"
-          fi
-          
-          echo "LUCI_APPS<<EOF" >> $GITHUB_ENV
-          echo -e "$APPS" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
 
       - name: 生成固件说明文件
         working-directory: ./${{ env.REAL_DIR }}
