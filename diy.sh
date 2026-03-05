@@ -12,8 +12,8 @@ echo "net.netfilter.nf_conntrack_max = 655535" >> package/base-files/files/etc/s
 ##自发布时最新版
 echo "更新sing-box"
 # 自动识别并替换 PKG_VERSION 和 PKG_HASH
-sed -i -E 's/(PKG_VERSION:=)[^ ]+/\1 1.13.1-beta.2/' feeds/packages/net/sing-box/Makefile
-sed -i -E 's|(PKG_HASH:=)[^ ]+|\1 23971979c3e6423e495bda88a0df665da84fc65e085ddfcbe368eb6d111c35d7|' feeds/packages/net/sing-box/Makefile
+sed -i -E 's/(PKG_VERSION:=)[^ ]+/\1 1.13.1/' feeds/packages/net/sing-box/Makefile
+sed -i -E 's|(PKG_HASH:=)[^ ]+|\1 62624d4c11e318606b0dc181d1da4b2b4d7e110f67c6fb15e1ba14bb88377f69|' feeds/packages/net/sing-box/Makefile
 
 # 修改 xray-core 包中的 PKG_VERSION 和 PKG_HASH
 echo "更新xray-core"
