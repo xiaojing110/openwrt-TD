@@ -14,9 +14,23 @@ immortalwrt固件使用默认自定义diy可能不会生效,请另外生成一�
 此编译完全匹配本地编译方式方法
 
 仅限自用，还在完善
+<img width="308" height="428" alt="image" src="https://github.com/user-attachments/assets/0eb18689-33bc-43ee-a1ae-b20bfab63237" />
+
+使用方法：
+ip可选择自定义默认10.0.0.1
+
+rax3000mconfig:https://raw.githubusercontent.com/xiaojing110/openwrt-TD/refs/heads/main/rax3000m/.config
+
+X86默认(无需或者用自己的)：https://raw.githubusercontent.com/xiaojing110/openwrt-TD/refs/heads/main/X86/.config
+
+默认diy：https://raw.githubusercontent.com/xiaojing110/openwrt-TD/refs/heads/main/diy.sh
+
+
 
 待完成功能
 可能会开启ssh在线构建
 
 觉得好用可以点点star
-源码来自:https://github.com/coolsnowwolf/lede
+源码来自:
+lede:https://github.com/coolsnowwolf/lede
+immortalwrt:https://github.com/immortalwrt/immortalwrt
