@@ -5,17 +5,6 @@
 #echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> feeds.conf.default
 #echo "src-git small https://github.com/kenzok8/small" >> feeds.conf.default
 
-# 可选：显示版本信息，便于确认
-if [ -f "luci-app-passwall/Makefile" ]; then
-    echo "替换后的版本信息："
-    grep -E "PKG_NAME|PKG_VERSION" luci-app-passwall/Makefile | head -n 4 || echo "未找到版本信息"
-else
-    echo "警告：Makefile 不存在，替换可能失败！"
-fi
-
-cd - >/dev/null  # 返回原来的目录
-echo "passwall 替换流程结束。"
-
 echo "修改 连接数限制"
 echo "net.netfilter.nf_conntrack_max = 655535" >> package/base-files/files/etc/sysctl.conf
 
