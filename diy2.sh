@@ -88,7 +88,7 @@ grep "GEOIP_VER:=" feeds/packages/net/v2ray-geodata/Makefile || echo "v2ray-geod
 # 覆盖 geoview Makefile（来自 kenzok8/small，通常版本更新更快，支持预编译二进制）
 echo "覆盖 geoview Makefile 为 kenzok8/small 版本"
 curl -s -o feeds/packages/net/geoview/Makefile https://raw.githubusercontent.com/kenzok8/small/master/geoview/Makefile
-# 可选：显示版本确认（2025-08-09 是你拉取时的版本，未来可能更新）
+# 可选：显示版本确认（0.2.5 是你拉取时的版本，未来可能更新）
 grep "PKG_VERSION:=" feeds/packages/net/geoview/Makefile || echo "geoview Makefile 更新失败"
 
 # ------------------ 替换 luci-app-passwall ------------------
