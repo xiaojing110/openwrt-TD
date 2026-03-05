@@ -87,7 +87,7 @@ jobs:
           if [ "${{ env.SOURCE }}" = "immortalwrt" ]; then
             git clone --depth=1 https://github.com/immortalwrt/immortalwrt.git lede
           elif [ "${{ env.SOURCE }}" = "mt798x-closed" ]; then
-            echo "⚠️ 使用闭源优化版 (padavanonly/immortalwrt-mt798x-6.6) - 仅适合 MT798x 机型（如 AX3000/AX6000）"
+            echo "⚠️ 使用闭源优化版 (padavanonly/immortalwrt-mt798x-6.6) - 仅适合 MT798x 机型"
             git clone --depth=1 -b openwrt-24.10-6.6 https://github.com/padavanonly/immortalwrt-mt798x-6.6.git lede
           else
             git clone --depth=1 https://github.com/coolsnowwolf/lede.git lede
@@ -139,7 +139,7 @@ jobs:
             echo "下载用户指定的 .config: ${{ env.CONFIG_URL }}"
             wget -O .config "${{ env.CONFIG_URL }}" || exit 1
           elif [ "${{ env.SOURCE }}" = "mt798x-closed" ]; then
-            echo "mt798x-closed 模式：无用户 config_url，使用仓库默认 mt7981-ax3000 示例（可手动指定 config_url 覆盖，如 mt7986-ax6000）"
+            echo "mt798x-closed 模式：使用默认 mt7981-ax3000 示例（可通过 config_url 覆盖）"
             if [ -f "defconfig/mt7981-ax3000.config" ]; then
               cp -f defconfig/mt7981-ax3000.config .config
             else
@@ -172,21 +172,16 @@ jobs:
           cd ..
           rm -rf temp-passwall
 
-      # ─────────────── 新增：mt798x-closed 专用 golang 替换 ───────────────
       - name: mt798x-closed 模式 - 替换 golang 到 1.26 分支并更新 feeds
         if: env.SOURCE == 'mt798x-closed'
         working-directory: ./lede
         run: |
-          echo "替换 golang feed 为 kenzok8 1.26 版本（兼容新版 passwall/xray 等）"
+          echo "替换 golang feed 为 kenzok8 1.26 版本"
           rm -rf feeds/packages/lang/golang || true
           git clone --depth=1 -b 1.26 https://github.com/kenzok8/golang.git feeds/packages/lang/golang || { echo "克隆 golang 1.26 失败"; exit 1; }
-          
-          echo "重新更新 feeds 以应用新 golang"
           ./scripts/feeds update -a
           ./scripts/feeds install -a -f
-          
-          # 可选：显示版本确认
-          grep -E "PKG_VERSION|GO_VERSION" feeds/packages/lang/golang/golang/Makefile || echo "未找到 golang Makefile 版本信息"
+          grep -E "PKG_VERSION|GO_VERSION" feeds/packages/lang/golang/golang/Makefile || echo "未找到 golang 版本信息"
 
       - name: 应用自定义修改（LAN IP + 强制 Argon 主题）
         working-directory: ./lede
@@ -220,32 +215,58 @@ jobs:
         run: |
           make -j$(nproc) V=s || make -j1 V=s
 
-      - name: 生成固件说明文件
+      - name: 生成固件说明文件 + 提取机型与主要应用信息
         working-directory: ./lede
         run: |
           TARGET_DIR=$(find bin/targets -mindepth 2 -maxdepth 3 -type d 2>/dev/null | head -n1)
           [ -z "$TARGET_DIR" ] && mkdir -p "bin/targets/x86/64" && TARGET_DIR="bin/targets/x86/64"
+
+          # 提取目标设备信息
+          TARGET_PROFILE_LINE=$(grep -E '^CONFIG_TARGET_[a-z0-9]+_[a-z0-9]+=' .config | tail -n1)
+          if [ -n "$TARGET_PROFILE_LINE" ]; then
+            TARGET_PROFILE=$(echo "$TARGET_PROFILE_LINE" | cut -d= -f1 | cut -d_ -f4- | sed 's/_/-/g' | tr '[:upper:]' '[:lower:]')
+          else
+            TARGET_PROFILE="generic-or-unknown"
+          fi
+
+          TARGET_BOARD=$(grep '^CONFIG_TARGET_BOARD=' .config | cut -d'"' -f2 | head -n1 || echo "unknown")
+          TARGET_SUBTARGET=$(grep '^CONFIG_TARGET_SUBTARGET=' .config | cut -d'"' -f2 | head -n1 || echo "unknown")
+
+          DEVICE_INFO="${TARGET_BOARD}/${TARGET_SUBTARGET}/${TARGET_PROFILE}"
+          [ "$DEVICE_INFO" = "unknown/unknown/generic-or-unknown" ] && DEVICE_INFO="未知设备（请检查 .config）"
+
+          # 提取常见 luci-app
+          echo "" > apps.txt
+          echo "已选中的主要 LuCI 应用（部分）：" >> apps.txt
+          grep -E '^CONFIG_PACKAGE_luci-app-(passwall|openclash|zerotier|ddns|upnp|transmission|aria2|frpc|frps|ttyd|filebrowser|dockerman|mwan3|https-dns-proxy|mosdns|adguardhome|shadowsocks|simple-obfs|v2ray|xray|homeproxy|argon|fullcone|full|lite)=y' .config \
+            | sed 's/^CONFIG_PACKAGE_luci-app-//; s/=y$//; s/^/  - /' \
+            | sort -u \
+            | head -n 30 >> apps.txt || echo "  （未检测到常见 luci-app）" >> apps.txt
+
+          # 写入说明文件
           cat > "$TARGET_DIR/固件说明.txt" << EOF
           ==================== 固件信息 ====================
-          固件来源 : ${{ env.SOURCE }} （mt798x-closed 为闭源优化版，仅限 MT798x 机型，含部分 MediaTek 闭源驱动/HNAT/无线补丁）
+          固件来源     : ${{ env.SOURCE }} （mt798x-closed 为闭源优化版，仅限 MT798x 机型）
+          目标设备     : $DEVICE_INFO
           编译完成时间 : $(date '+%Y-%m-%d %H:%M:%S %Z') (Asia/Shanghai)
-          后台地址 : http://${{ env.LAN_IP }}
-          用户名/密码 : root / password
-          作者/维护者 : ${{ env.BUILD_AUTHOR }}
-          config 来源 : ${{ env.CONFIG_URL || env.REMOTE_CONFIG_URL }}
-          diy 来源 : ${{ env.DIY_URL || '本地 diy.sh（若存在）' || '无 diy' }}
-          Passwall 来源 : Openwrt-Passwall/openwrt-passwall (sparse checkout)
+          后台地址     : http://${{ env.LAN_IP }}
+          用户名/密码  : root / password
+          作者/维护者  : ${{ env.BUILD_AUTHOR }}
+          config 来源  : ${{ env.CONFIG_URL || env.REMOTE_CONFIG_URL }}
+          diy 来源     : ${{ env.DIY_URL || '本地 diy.sh（若存在）' || '无' }}
+          
+          $(cat apps.txt)
           ================================================
           EOF
+
+          echo "DEVICE_INFO=$DEVICE_INFO" >> $GITHUB_ENV
+          echo "RELEASE_TITLE=${{ env.SOURCE }} - $DEVICE_INFO - ${{ env.LAN_IP }} - #${{ github.run_number }}" >> $GITHUB_ENV
 
       - name: 打包 bin 目录为 zip（只包含 .ipk / .apk 等，排除固件镜像）
         working-directory: ./lede
         run: |
           ZIP_NAME="packages-ipk-apk-${{ env.SOURCE }}-${{ github.run_number }}.zip"
-        
           cd bin
-        
-          # 使用 -x 排除常见固件文件后缀
           zip -r -9 "../${ZIP_NAME}" . \
             -x "targets/*/*.img" \
             -x "targets/*/*.img.gz" \
@@ -260,7 +281,6 @@ jobs:
             -x "targets/*/profiles.json" \
             -x "targets/*/sha256sums" \
             || true
-        
           cd ..
           ls -lh "${ZIP_NAME}" || true
           unzip -l "${ZIP_NAME}" | head -n 20 || true
@@ -269,29 +289,17 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ env.SOURCE }}-${{ github.run_number }}
-          name: ${{ env.SOURCE }} 固件 - ${{ env.LAN_IP }} - ${{ github.run_number }}
+          name: ${{ env.RELEASE_TITLE }}
           body: |
             ### 固件构建信息
-            - **固件来源**： ${{ env.SOURCE }} （若为 mt798x-closed，则为闭源优化版，仅适合 MT798x 机型）
+            
+            - **固件来源**： ${{ env.SOURCE }}  
+              （若为 mt798x-closed，则为闭源优化版，仅适合 MT798x 机型）
+            - **目标设备**： ${{ env.DEVICE_INFO }}
             - **LAN IP**： ${{ env.LAN_IP }}
             - **编译完成时间**： $(date '+%Y-%m-%d %H:%M:%S %Z') (Asia/Shanghai)
             - **作者/维护者**： ${{ env.BUILD_AUTHOR }}
-            - **配置来源**： ${{ env.CONFIG_URL || '默认远程' }}
-            - **diy 脚本**： ${{ env.DIY_URL || '本地 diy.sh（若存在）' }}
-            **已上传内容**：
-            • 系统固件镜像（.img / .bin / .squashfs / .vdi / .vmdk / .ova 等） → 用于刷机
-            • 固件说明.txt
-            • packages-ipk-apk-*.zip → 只包含 .ipk / .apk 等软件包（已排除所有固件镜像文件）
-            **注意**：zip 文件不包含任何系统固件镜像，仅供需要软件包的用户下载
-          files: |
-            lede/bin/targets/**/*.img
-            lede/bin/targets/**/*.img.gz
-            lede/bin/targets/**/*.bin
-            lede/bin/targets/**/*.squashfs
-            lede/bin/targets/**/*.vdi
-            lede/bin/targets/**/*.vmdk
-            lede/bin/targets/**/*.ova
-            lede/bin/targets/**/固件说明.txt
-            lede/packages-ipk-apk-*.zip
-          draft: false
-          prerelease: false
+            - **配置来源**： ${{ env.CONFIG_URL || '默认远程 config' }}
+            - **diy 脚本**： ${{ env.DIY_URL || '本地 diy.sh（若存在）' || '无' }}
+            
+            **已启用主要 LuCI 应用（部分，来自 .config 提取）**：
