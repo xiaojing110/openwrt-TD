@@ -159,19 +159,6 @@ jobs:
           fi
           make defconfig
 
-      - name: 替换 luci-app-passwall（sparse checkout）
-        working-directory: ./feeds/luci/applications
-        run: |
-          rm -rf luci-app-passwall || true
-          git clone --depth=1 --single-branch https://github.com/Openwrt-Passwall/openwrt-passwall.git temp-passwall
-          cd temp-passwall
-          git sparse-checkout init --cone
-          git sparse-checkout set luci-app-passwall
-          git checkout
-          mv luci-app-passwall ../../
-          cd ..
-          rm -rf temp-passwall
-
       - name: mt798x-closed 模式 - 替换 golang 到 1.26 分支并更新 feeds
         if: env.SOURCE == 'mt798x-closed'
         working-directory: ./lede
