@@ -91,6 +91,12 @@ curl -s -o feeds/packages/net/geoview/Makefile https://raw.githubusercontent.com
 # 可选：显示版本确认（0.2.5 是你拉取时的版本，未来可能更新）
 grep "PKG_VERSION:=" feeds/packages/net/geoview/Makefile || echo "geoview Makefile 更新失败"
 
+# 覆盖 hysteria Makefile（来自 kenzok8/small，通常版本更新更快，支持预编译二进制）
+echo "覆盖 hysteria Makefile 为 kenzok8/small 版本"
+curl -s -o feeds/packages/net/hysteria/Makefile https://raw.githubusercontent.com/kenzok8/small/master/hysteria/Makefile
+# 可选：显示版本确认（2.7.1 是你拉取时的版本，未来可能更新）
+grep "PKG_VERSION:=" feeds/packages/net/hysteria/Makefile || echo "hysteria Makefile 更新失败"
+
 # ------------------ 替换 luci-app-passwall ------------------
 echo "开始替换 luci-app-passwall 为 Openwrt-Passwall 官方版本..."
 
