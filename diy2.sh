@@ -99,7 +99,23 @@ grep "PKG_VERSION:=" feeds/packages/net/hysteria/Makefile || echo "hysteria Make
 
 #添加闭源缺失的mosdns luci
 echo "添加缺失的LUCI-APP-MOSDNS"
-git clone https://github.com/xiaojing110/luci-app-mosdns.git feeds/luci/applications
+# ------------------ 添加 luci-app-mosdns ------------------
+echo "添加 luci-app-mosdns..."
+
+[ -d "feeds/luci/applications/luci-app-mosdns" ] && rm -rf feeds/luci/applications/luci-app-mosdns
+
+cd feeds/luci/applications || exit 1
+
+git clone --depth=1 https://github.com/xiaojing110/luci-app-mosdns.git luci-app-mosdns || exit 1
+
+if [ -f "luci-app-mosdns/Makefile" ]; then
+    echo "mosdns 已添加，版本信息："
+    grep -E "PKG_NAME|PKG_VERSION" luci-app-mosdns/Makefile
+else
+    echo "警告：未找到 Makefile"
+fi
+
+cd - >/dev/null
 
 # ------------------ 替换 luci-app-passwall ------------------
 echo "开始替换 luci-app-passwall 为 Openwrt-Passwall 官方版本..."
