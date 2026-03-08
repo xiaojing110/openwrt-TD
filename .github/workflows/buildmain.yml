@@ -1,4 +1,5 @@
 name: 构建 LEDE / ImmortalWrt 固件
+
 on:
   workflow_dispatch:
     inputs:
@@ -15,6 +16,10 @@ on:
         description: '自定义后台 LAN IP（例如 192.168.5.1 或 10.0.0.1）'
         required: false
         default: '10.0.0.1'
+      hostname:
+        description: '自定义主机名（留空 = 不修改，使用源码默认值）'
+        required: false
+        default: ''
       config_url:
         description: '自定义 .config 文件下载地址（优先级最高）'
         required: false
@@ -23,14 +28,17 @@ on:
         description: '远程 diy 脚本地址（.sh 文件，会在 feeds 更新后、passwall 替换前执行）'
         required: false
         default: ''
+
 env:
   TZ: Asia/Shanghai
   REMOTE_CONFIG_URL: "https://raw.githubusercontent.com/xiaojing110/openwrt-TD/main/X86/.config"
   LAN_IP: ${{ github.event.inputs.lan_ip || '10.0.0.1' }}
+  HOSTNAME: ${{ github.event.inputs.hostname }}
   SOURCE: ${{ github.event.inputs.source || 'lede' }}
   CONFIG_URL: ${{ github.event.inputs.config_url || '' }}
   DIY_URL: ${{ github.event.inputs.diy_url || '' }}
   BUILD_AUTHOR: ${{ github.repository_owner }}
+
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -42,13 +50,16 @@ jobs:
         with:
           ref: main
           fetch-depth: 1
+
       - name: 显示调试信息
         run: |
           echo "当前分支: $(git branch --show-current || echo '未知')"
           ls -la
-          find . -maxdepth 3 -type f \( -name ".config" -o -name "diy.sh" \) || true
+          find . -maxdepth 3 -type f \( -name ".config" -o -name "config.buildinfo" -o -name "diy.sh" \) || true
+
       - name: 设置时区
         run: sudo timedatectl set-timezone "${TZ}"
+
       - name: 安装编译依赖
         run: |
           sudo apt update -y && sudo apt full-upgrade -y
@@ -63,6 +74,7 @@ jobs:
             qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs \
             upx-ucl unzip vim wget xmlto xxd zlib1g-dev zip
           sudo apt clean
+
       - name: 最大化构建空间
         uses: easimon/maximize-build-space@master
         with:
@@ -73,6 +85,7 @@ jobs:
           remove-haskell: 'true'
           remove-codeql: 'true'
           remove-docker-images: 'true'
+
       - name: 克隆源码
         run: |
           if [ "${{ env.SOURCE }}" = "immortalwrt" ]; then
@@ -83,6 +96,7 @@ jobs:
           else
             git clone --depth=1 https://github.com/coolsnowwolf/lede.git source-dir
           fi
+
       - name: 确定源码目录真实名称
         id: detect_dir
         run: |
@@ -90,6 +104,7 @@ jobs:
           echo "REAL_DIR=$REAL_DIR" >> $GITHUB_ENV
           echo "源码目录: $REAL_DIR"
           ls -la $REAL_DIR
+
       - name: 修改 feeds.conf.default（仅 lede 使用 coolsnowwolf/luci openwrt-25.12 分支）
         if: env.SOURCE == 'lede'
         working-directory: ./${{ env.REAL_DIR }}
@@ -97,15 +112,18 @@ jobs:
           sed -i '/^src-git luci/c\src-git luci https://github.com/coolsnowwolf/luci.git;openwrt-25.12' feeds.conf.default || true
           echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> feeds.conf.default || true
           echo "src-git small https://github.com/kenzok8/small" >> feeds.conf.default || true
+
       - name: 修改 feeds.conf.default（通用部分：qmodem + mosdns）
         working-directory: ./${{ env.REAL_DIR }}
         run: |
           sed -i 's/^#src-git qmodem/src-git qmodem/' feeds.conf.default || true
+
       - name: 更新并安装 feeds
         working-directory: ./${{ env.REAL_DIR }}
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a -f
+
       - name: 执行 diy 脚本（优先远程 diy_url，其次本地 diy.sh）
         working-directory: ./${{ env.REAL_DIR }}
         run: |
@@ -126,55 +144,48 @@ jobs:
             DIY_STATUS="无 diy 脚本"
           fi
           echo "DIY 状态: $DIY_STATUS"
-      - name: 加载 .config
+
+      - name: 加载 .config（支持 config.buildinfo）
         working-directory: ./${{ env.REAL_DIR }}
         run: |
+          CONFIG_FOUND=false
+          CONFIG_SOURCE="未知来源"
+
           if [ -n "${{ env.CONFIG_URL }}" ]; then
-            echo "下载用户指定的 .config: ${{ env.CONFIG_URL }}"
-            wget -O .config "${{ env.CONFIG_URL }}" || exit 1
-          elif [ "${{ env.SOURCE }}" = "mt798x-closed" ]; then
-            echo "mt798x-closed 模式：尝试使用默认 mt7981-ax3000 示例"
-            if [ -f "defconfig/mt7981-ax3000.config" ]; then
-              cp -f defconfig/mt7981-ax3000.config .config
-            else
-              wget -O .config "${{ env.REMOTE_CONFIG_URL }}" || exit 1
-            fi
-          elif [ -f "../../.config" ]; then
-            cp -fv "../../.config" .config
-          elif [ -f "../../X86/.config" ]; then
-            cp -fv "../../X86/.config" .config
-          else
-            echo "使用默认远程 config"
-            wget -O .config "${{ env.REMOTE_CONFIG_URL }}" || exit 1
+            echo "优先使用用户指定的远程 .config: ${{ env.CONFIG_URL }}"
+            wget -O .config "${{ env.CONFIG_URL }}" && CONFIG_FOUND=true && CONFIG_SOURCE="用户指定的 config_url"
           fi
-         
-          if [ ! -s .config ]; then
-            echo "错误：.config 文件为空或下载失败"
+
+          if [ "$CONFIG_FOUND" = false ] && [ -f "../../config.buildinfo" ]; then
+            echo "发现仓库根目录 config.buildinfo，使用它"
+            cp -fv "../../config.buildinfo" .config && CONFIG_FOUND=true && CONFIG_SOURCE="仓库根目录 config.buildinfo"
+          fi
+
+          if [ "$CONFIG_FOUND" = false ] && [ -f "../../.config" ]; then
+            echo "使用仓库根目录 .config"
+            cp -fv "../../.config" .config && CONFIG_FOUND=true && CONFIG_SOURCE="仓库根目录 .config"
+          fi
+
+          if [ "$CONFIG_FOUND" = false ] && [ -f "../../X86/.config" ]; then
+            echo "使用 X86/.config（兼容旧习惯）"
+            cp -fv "../../X86/.config" .config && CONFIG_FOUND=true && CONFIG_SOURCE="仓库 X86/.config"
+          fi
+
+          if [ "$CONFIG_FOUND" = false ]; then
+            echo "使用默认远程 config 兜底: ${{ env.REMOTE_CONFIG_URL }}"
+            wget -O .config "${{ env.REMOTE_CONFIG_URL }}" && CONFIG_FOUND=true && CONFIG_SOURCE="默认远程 REMOTE_CONFIG_URL"
+          fi
+
+          if [ "$CONFIG_FOUND" = false ] || [ ! -s .config ]; then
+            echo "错误：没有任何有效的 .config 文件"
             exit 1
           fi
-         
+
+          echo "最终 config 来源：$CONFIG_SOURCE"
+          ls -lh .config
+
           make defconfig
-      - name: 提取目标信息（用于 Release 标题和说明）
-        id: extract_target
-        working-directory: ./${{ env.REAL_DIR }}
-        run: |
-          TARGET_BOARD=$(grep '^CONFIG_TARGET_' .config | grep '=y' | head -1 | sed -n 's/CONFIG_TARGET_\([^=]*\)=y/\1/p' || echo "unknown")
-          TARGET_SUB=$(grep '^CONFIG_TARGET_.*_.*=y' .config | grep -v '^CONFIG_TARGET_BOARD' | head -1 | cut -d_ -f4- | cut -d= -f1 || echo "")
-         
-          if [ -n "$TARGET_SUB" ]; then
-            TARGET_FULL="${TARGET_BOARD}-${TARGET_SUB}"
-          else
-            TARGET_FULL="$TARGET_BOARD"
-          fi
-         
-          # 尝试获取更友好的 profile 名称
-          TARGET_PROFILE=$(make info 2>/dev/null | grep '^Target Profile' | cut -d: -f2- | xargs || echo "$TARGET_FULL")
-          [ -z "$TARGET_PROFILE" ] && TARGET_PROFILE="$TARGET_FULL"
-         
-          echo "TARGET_PROFILE=$TARGET_PROFILE" >> $GITHUB_ENV
-          echo "TARGET_FULL=$TARGET_FULL" >> $GITHUB_ENV
-          echo "提取目标: $TARGET_PROFILE ($TARGET_FULL)"
-          
+
       - name: mt798x-closed 模式 - 替换 golang 到 1.26 分支
         if: env.SOURCE == 'mt798x-closed'
         working-directory: ./${{ env.REAL_DIR }}
@@ -182,22 +193,38 @@ jobs:
           echo "替换 golang feed 为 kenzok8 1.26 版本"
           rm -rf feeds/packages/lang/golang || true
           git clone --depth=1 -b 1.26 https://github.com/kenzok8/golang.git feeds/packages/lang/golang || exit 1
-         
           ./scripts/feeds update -a
           ./scripts/feeds install -a -f
-         
           grep -E "PKG_VERSION|GO_VERSION" feeds/packages/lang/golang/golang/Makefile || echo "未找到 golang 版本信息"
-      - name: 应用自定义修改（LAN IP + 强制 Argon 主题）
+
+      - name: 应用自定义修改（LAN IP + 主机名 + 强制 Argon 主题）
         working-directory: ./${{ env.REAL_DIR }}
         run: |
+          echo "设置 LAN IP 为 ${{ env.LAN_IP }}"
           sed -i "s/192.168.1.1/${{ env.LAN_IP }}/g" package/base-files/files/bin/config_generate
           PREFIX_3=$(echo "${{ env.LAN_IP }}" | cut -d. -f1-3).
           PREFIX_2=$(echo "${{ env.LAN_IP }}" | cut -d. -f1-2).
           sed -i "s/192.168.1./${PREFIX_3}/g" package/base-files/files/bin/config_generate
           sed -i "s/192.168./${PREFIX_2}/g" package/base-files/files/bin/config_generate
-         
+
+          # 主机名：只有非空且 trim 后非空才修改
+          HOSTNAME_TRIMMED=$(echo "${{ env.HOSTNAME }}" | xargs)
+          if [ -n "$HOSTNAME_TRIMMED" ]; then
+            echo "设置主机名 为 $HOSTNAME_TRIMMED"
+            sed -i -E "s/(set system\.@system\[-1\]\.hostname=')[^']+'/\1$HOSTNAME_TRIMMED'/" package/base-files/files/bin/config_generate
+            sed -i -E "s/^hostname=.*$/hostname='$HOSTNAME_TRIMMED'/" package/base-files/files/bin/config_generate || true
+            echo "当前 hostname 设置："
+            grep -E "hostname=" package/base-files/files/bin/config_generate || echo "未找到 hostname 行"
+            echo "HOSTNAME_USED=$HOSTNAME_TRIMMED" >> $GITHUB_ENV
+          else
+            echo "主机名输入为空 → 不修改，使用源码默认主机名"
+            echo "HOSTNAME_USED=源码默认" >> $GITHUB_ENV
+          fi
+
+          echo "强制使用 Argon 主题"
           find feeds/luci/collections/ -type f -name Makefile -exec \
             sed -i -E 's/(luci-theme-)[a-zA-Z0-9_-]+/\1argon/g' {} \;
+
       - name: 缓存下载文件和工具链
         uses: actions/cache@v4
         with:
@@ -206,55 +233,84 @@ jobs:
             ${{ env.REAL_DIR }}/staging_dir
           key: ${{ runner.os }}-build-${{ env.SOURCE }}-${{ hashFiles(format('{0}/.config', env.REAL_DIR)) }}
           restore-keys: ${{ runner.os }}-build-${{ env.SOURCE }}-
+
       - name: 下载依赖包
         working-directory: ./${{ env.REAL_DIR }}
         run: |
           make download -j$(nproc) || make download -j1 V=s
+
       - name: 编译固件
         working-directory: ./${{ env.REAL_DIR }}
         env:
           FORCE_UNSAFE_CONFIGURE: 1
         run: |
           make -j$(nproc) V=s || make -j1 V=s
-      - name: 收集已选 luci-app 信息
+
+      - name: 收集已选 luci-app 信息（从固件 manifest 读取，最准确反映固件实际包含）
         working-directory: ./${{ env.REAL_DIR }}
         run: |
+          echo "尝试生成固件包清单 (make manifest)..."
           APPS=""
-          for pkg in passwall openclash mosdns helloworld luci-app-ssr-plus luci-app-vssr \
-                     luci-app-bypass luci-app-alist luci-app-homeproxy luci-app-linkease \
-                     luci-app-filebrowser luci-app-diskman luci-app-ddnsto luci-app-aliddns; do
-            if grep -q "CONFIG_PACKAGE_${pkg}=y" .config 2>/dev/null || [ -d "feeds/luci/applications/${pkg}" ]; then
-              VER=$(grep '^PKG_VERSION' feeds/*/applications/${pkg}/Makefile 2>/dev/null | head -1 | cut -d= -f2- | xargs || echo "unknown")
-              [ -z "$VER" ] && VER="已启用"
-              APPS="$APPS- ${pkg} (${VER})\n"
-            fi
-          done
-         
-          if [ -z "$APPS" ]; then
-            APPS="未检测到常见 luci-app（或未在 .config 中启用）"
+          
+          make manifest 2>/dev/null | grep -o 'luci-app-[^[:space:]]*' | sort | uniq > /tmp/luci-apps.txt || true
+          
+          if [ -s /tmp/luci-apps.txt ]; then
+            echo "✅ 从 manifest 成功提取 luci-app（固件内真实包含）"
+            while read -r pkg; do
+              APPS="$APPS- ${pkg} (已编译进固件)\n"
+            done < /tmp/luci-apps.txt
+          else
+            echo "manifest 生成失败，回退到 .config 读取"
+            grep '^CONFIG_PACKAGE_luci-app' .config 2>/dev/null | grep '=y' | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort | uniq > /tmp/luci-apps.txt || true
+            while read -r pkg; do
+              APPS="$APPS- ${pkg} (已启用)\n"
+            done < /tmp/luci-apps.txt
           fi
-         
+          
+          if [ -z "$APPS" ]; then
+            APPS="未检测到任何 luci-app 插件"
+          fi
+          
           echo "LUCI_APPS<<EOF" >> $GITHUB_ENV
           echo -e "$APPS" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
+
+      - name: 提取目标信息（用于 Release 标题和说明）
+        id: extract_target
+        working-directory: ./${{ env.REAL_DIR }}
+        run: |
+          TARGET_BOARD=$(grep '^CONFIG_TARGET_' .config | grep '=y' | head -1 | sed -n 's/CONFIG_TARGET_\([^=]*\)=y/\1/p' || echo "unknown")
+          TARGET_SUB=$(grep '^CONFIG_TARGET_.*_.*=y' .config | grep -v '^CONFIG_TARGET_BOARD' | head -1 | cut -d_ -f4- | cut -d= -f1 || echo "")
+          if [ -n "$TARGET_SUB" ]; then
+            TARGET_FULL="${TARGET_BOARD}-${TARGET_SUB}"
+          else
+            TARGET_FULL="$TARGET_BOARD"
+          fi
+          TARGET_PROFILE=$(make info 2>/dev/null | grep '^Target Profile' | cut -d: -f2- | xargs || echo "$TARGET_FULL")
+          [ -z "$TARGET_PROFILE" ] && TARGET_PROFILE="$TARGET_FULL"
+          echo "TARGET_PROFILE=$TARGET_PROFILE" >> $GITHUB_ENV
+          echo "TARGET_FULL=$TARGET_FULL" >> $GITHUB_ENV
+
       - name: 生成固件说明文件
         working-directory: ./${{ env.REAL_DIR }}
         run: |
           TARGET_DIR=$(find bin/targets -mindepth 2 -maxdepth 3 -type d 2>/dev/null | head -n1)
           [ -z "$TARGET_DIR" ] && mkdir -p "bin/targets/x86/64" && TARGET_DIR="bin/targets/x86/64"
-         
+        
           cat > "$TARGET_DIR/固件说明.txt" << EOF
           ==================== 固件信息 ====================
           固件来源 : ${{ env.SOURCE }}
           目标设备 : ${{ env.TARGET_PROFILE }} (${{ env.TARGET_FULL }})
           编译时间 : $(date '+%Y-%m-%d %H:%M:%S %Z') (Asia/Shanghai)
           后台地址 : http://${{ env.LAN_IP }}
+          主机名    : ${{ env.HOSTNAME_USED }}
           用户名/密码 : root / password
           作者/维护者 : ${{ env.BUILD_AUTHOR }}
-          config 来源 : ${{ env.CONFIG_URL || env.REMOTE_CONFIG_URL }}
+          config 来源 : ${{ env.CONFIG_URL || 'config.buildinfo / .config / 远程默认' }}
           diy 来源 : ${{ env.DIY_URL || '本地 diy.sh（若存在）' || '无' }}
           ================================================
           EOF
+
       - name: 打包软件包（排除固件镜像）
         working-directory: ./${{ env.REAL_DIR }}
         run: |
@@ -267,30 +323,32 @@ jobs:
             -x "targets/*/profiles.json" -x "targets/*/sha256sums" || true
           cd ..
           ls -lh "${ZIP_NAME}" || true
+
       - name: 发布到 GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ env.SOURCE }}-${{ env.TARGET_PROFILE || 'unknown' }}-${{ github.run_number }}
-          name: ${{ env.SOURCE }} • ${{ env.TARGET_PROFILE || '通用' }} • LAN ${{ env.LAN_IP }} • #${{ github.run_number }}
+          name: ${{ env.SOURCE }} • ${{ env.TARGET_PROFILE || '通用' }} • ${{ env.HOSTNAME_USED }} • LAN ${{ env.LAN_IP }} • #${{ github.run_number }}
           body: |
             ### 固件构建信息
             - **固件来源**： ${{ env.SOURCE }}
             - **目标设备**： ${{ env.TARGET_PROFILE }} (${{ env.TARGET_FULL }})
+            - **主机名**： ${{ env.HOSTNAME_USED }}
             - **LAN IP**： ${{ env.LAN_IP }}
             - **编译时间**： $(date '+%Y-%m-%d %H:%M:%S %Z') (Asia/Shanghai)
             - **作者**： ${{ env.BUILD_AUTHOR }}
-            - **配置来源**： ${{ env.CONFIG_URL || env.REMOTE_CONFIG_URL || '默认' }}
+            - **配置来源**： ${{ env.CONFIG_URL || 'config.buildinfo / 本地 / 远程默认' }}
             - **diy 脚本**： ${{ env.DIY_URL || '本地 diy.sh（若存在）' || '无' }}
-           
-            ### 已包含主要插件
+          
+            ### 已包含主要插件（来自固件 manifest）
             ${{ env.LUCI_APPS }}
-           
+          
             **上传内容**：
             • 固件镜像（img / bin / squashfs / vdi / vmdk / ova 等）
             • 固件说明.txt
-            • packages-*.zip （仅 ipk/apk 软件包，不含固件镜像）
-           
-            **注意**：zip 文件仅供需要单独软件包的用户下载
+            • packages-*.zip （仅 ipk/apk 软件包）
+          
+            **注意**：主机名留空时使用源码默认值；插件列表来自 `make manifest` + `.config` 双保险。
           files: |
             ${{ env.REAL_DIR }}/bin/targets/**/*.img
             ${{ env.REAL_DIR }}/bin/targets/**/*.img.gz
