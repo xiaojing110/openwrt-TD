@@ -97,6 +97,10 @@ curl -s -o feeds/packages/net/hysteria/Makefile https://raw.githubusercontent.co
 # 可选：显示版本确认（2.7.1 是你拉取时的版本，未来可能更新）
 grep "PKG_VERSION:=" feeds/packages/net/hysteria/Makefile || echo "hysteria Makefile 更新失败"
 
+#添加闭源缺失的mosdns luci
+echo "添加缺失的LUCI-APP-MOSDNS"
+git clone https://github.com/xiaojing110/luci-app-mosdns.git /feeds/luci/applications
+
 # ------------------ 替换 luci-app-passwall ------------------
 echo "开始替换 luci-app-passwall 为 Openwrt-Passwall 官方版本..."
 
