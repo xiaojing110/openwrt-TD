@@ -97,25 +97,29 @@ curl -s -o feeds/packages/net/hysteria/Makefile https://raw.githubusercontent.co
 # 可选：显示版本确认（2.7.1 是你拉取时的版本，未来可能更新）
 grep "PKG_VERSION:=" feeds/packages/net/hysteria/Makefile || echo "hysteria Makefile 更新失败"
 
-#添加闭源缺失的mosdns luci
-echo "添加缺失的LUCI-APP-MOSDNS"
 # ------------------ 添加 luci-app-mosdns ------------------
 echo "添加 luci-app-mosdns..."
 
-[ -d "feeds/luci/applications/luci-app-mosdns" ] && rm -rf feeds/luci/applications/luci-app-mosdns
+# 进入 feeds/luci/applications
+cd feeds/luci/applications || { echo "错误：无法进入 feeds/luci/applications"; exit 1; }
 
-cd feeds/luci/applications || exit 1
+# 直接浅克隆到 luci-app-mosdns 目录（最简单方式）
+echo "克隆 xiaojing110/luci-app-mosdns 仓库（浅克隆）..."
+git clone --depth=1 --single-branch --branch main \
+    https://github.com/xiaojing110/luci-app-mosdns.git luci-app-mosdns || {
+    echo "克隆失败，请检查网络或仓库是否可用"; exit 1;
+}
 
-git clone --depth=1 https://github.com/xiaojing110/luci-app-mosdns.git luci-app-mosdns || exit 1
-
+# 可选：显示版本信息，便于确认
 if [ -f "luci-app-mosdns/Makefile" ]; then
-    echo "mosdns 已添加，版本信息："
-    grep -E "PKG_NAME|PKG_VERSION" luci-app-mosdns/Makefile
+    echo "luci-app-mosdns 添加成功，版本信息："
+    grep -E "PKG_NAME|PKG_VERSION" luci-app-mosdns/Makefile | head -n 4 || echo "未找到版本信息"
 else
-    echo "警告：未找到 Makefile"
+    echo "警告：Makefile 不存在，添加可能失败！"
 fi
 
-cd - >/dev/null
+cd - >/dev/null  # 返回原来的目录
+echo "luci-app-mosdns 添加流程结束。"
 
 # ------------------ 替换 luci-app-passwall ------------------
 echo "开始替换 luci-app-passwall 为 Openwrt-Passwall 官方版本..."
@@ -163,3 +167,6 @@ fi
 
 cd - >/dev/null  # 返回原来的目录
 echo "passwall 替换流程结束。"
+
+echo "更新并安装所有 feeds..."
+./scripts/feeds update -a && ./scripts/feeds install -a
