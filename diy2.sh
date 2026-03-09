@@ -173,3 +173,12 @@ echo "更新 feeds 并安装所有包定义..."
 ./scripts/feeds update -a && ./scripts/feeds install -a || {
     echo "feeds update/install 失败，请检查日志"; exit 1;
 }
+# 可选：显示 Makefile 中的版本信息确认
+if [ -f "feeds/luci/applications/luci-app-mosdns/Makefile" ]; then
+    echo "luci-app-mosdns 已添加，版本信息："
+    grep -E "PKG_NAME|PKG_VERSION" feeds/luci/applications/luci-app-mosdns/Makefile | head -n 4 || echo "未找到版本信息"
+else
+    echo "警告：Makefile 不存在，添加可能有问题！"
+fi
+
+echo "luci-app-mosdns 添加并注册完成！"
