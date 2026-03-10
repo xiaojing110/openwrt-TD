@@ -162,9 +162,3 @@ fi
 
 cd - >/dev/null  # 返回原来的目录
 echo "passwall 替换流程结束。"
-
-# 关键：更新 feeds 索引 & 安装所有包（包括新加的 mosdns）
-echo "更新 feeds 并安装所有包定义..."
-./scripts/feeds update -a && ./scripts/feeds install -a || {
-    echo "feeds update/install 失败，请检查日志"; exit 1;
-}
