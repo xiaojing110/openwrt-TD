@@ -71,10 +71,11 @@ sed -i "s|^PKG_HASH:=.*|PKG_HASH:=3172293d04b209dc1144698e7ba13f0477f6ba8c5ffd0b
 # 验证修改结果
 grep -E "GO_VERSION|PKG_HASH" feeds/packages/lang/golang/golang/Makefile
 
-# 修改 linux-firmware Makefile 中的 PKG_VERSION 和 PKG_HASH
-#echo "更新linux-firmware"
-#sed -i 's/PKG_VERSION:=20250509/PKG_VERSION:=20250808/' package/firmware/linux-firmware/Makefile
-#sed -i 's/PKG_HASH:=f2c60d66f226a28130cb5643e6e544d3229673460e127c91ba03f1080cbd703e/PKG_HASH:=c029551b45a15926c9d7a5df1a0b540044064f19157c57fc11d91fd0aade837f/' package/firmware/linux-firmware/Makefile
+# 修改 linux-firmware 包中的 PKG_VERSION 和 PKG_HASH
+echo "更新linux-firmware"
+# 自动识别并替换 PKG_VERSION 和 PKG_HASH
+sed -i -E 's/(PKG_VERSION:=)[^ ]+/\1 20260309/' package/firmware/linux-firmware/Makefile
+sed -i -E 's|(PKG_HASH:=)[^ ]+|\1 c74cc6f562b58ad5bc6b2b00a61abc29c9e49e06126e7ba34fbca9928e07a96c|' package/firmware/linux-firmware/Makefile
 
 # 覆盖 chinadns-ng Makefile（来自 kenzok8/small，通常版本更新更快，支持预编译二进制）
 echo "覆盖 chinadns-ng Makefile 为 kenzok8/small 版本"
