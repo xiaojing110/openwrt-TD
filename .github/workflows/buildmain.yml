@@ -110,13 +110,14 @@ jobs:
         working-directory: ./${{ env.REAL_DIR }}
         run: |
           sed -i '/^src-git luci/c\src-git luci https://github.com/coolsnowwolf/luci.git;openwrt-25.12' feeds.conf.default || true
-          echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> feeds.conf.default || true
-          echo "src-git small https://github.com/kenzok8/small" >> feeds.conf.default || true
+         # echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> feeds.conf.default || true
+          #echo "src-git small https://github.com/kenzok8/small" >> feeds.conf.default || true
 
       - name: 修改 feeds.conf.default（通用部分：qmodem + mosdns）
         working-directory: ./${{ env.REAL_DIR }}
         run: |
           sed -i 's/^#src-git qmodem/src-git qmodem/' feeds.conf.default || true
+          echo "src-git mosdns https://github.com/xiaojing110/luci-app-mosdns.git" >> feeds.conf.default || true
 
       - name: 更新并安装 feeds
         working-directory: ./${{ env.REAL_DIR }}
