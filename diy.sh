@@ -59,8 +59,8 @@ sed -i -E 's|(PKG_HASH:=)[^ ]+|\1 959496928c8a676ec8377f665ff6a19a707bfad693325f
 
 #6.12 内核
 echo "更新 kernel-6.12内核"
-sed -i 's|LINUX_VERSION-6.12 = .*|LINUX_VERSION-6.12 = .76|' include/kernel-6.12
-sed -i 's|LINUX_KERNEL_HASH-6.12.*|LINUX_KERNEL_HASH-6.12.76 = bbb43e834c46e6bd49a5c28f22e679a937443404e1f653204d4b24929f3ad896|' include/kernel-6.12
+sed -i 's|LINUX_VERSION-6.12 = .*|LINUX_VERSION-6.12 = .77|' include/kernel-6.12
+sed -i 's|LINUX_KERNEL_HASH-6.12.*|LINUX_KERNEL_HASH-6.12.77 = 358836ebe5caef41e7ae9492e7fbcdf5be6e53ee43c99752aebda81e1b2cff67|' include/kernel-6.12
 
 #自动识别并修改golang版本
 echo "更新 golang 到 1.26.1"
@@ -102,15 +102,6 @@ grep "GEOIP_VER:=" feeds/packages/net/v2ray-geodata/Makefile || echo "v2ray-geod
 #下面这个需要加配置文件内
 #固件名字
 #CONFIG_EXTRA_IMAGE_NAME="ThatDream"
-
-# 同时更新 sing-box（你之前的例子）
-echo "更新 sing-box"
-sed -i -E 's/(PKG_VERSION:=)[^ ]+/\1 1.14.0-alpha.1/' feeds/packages/net/sing-box/Makefile
-sed -i -E 's|(PKG_HASH:=)[^ ]+|\1 d16a2a289bd66f9c862fec0a7069493e3114d06a0bedc84d088a5101e6764cee|' feeds/packages/net/sing-box/Makefile
-
-# （可选）验证修改结果
-grep "hostname=" package/base-files/files/bin/config_generate
-grep "sing-box.*PKG_" feeds/packages/net/sing-box/Makefile
 
 # ------------------ 替换 luci-app-passwall ------------------
 echo "开始替换 luci-app-passwall 为 Openwrt-Passwall 官方版本..."
