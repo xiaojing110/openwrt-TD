@@ -12,31 +12,26 @@ on:
           - lede
           - immortalwrt
           - mt798x-closed
-
       lan_ip:
         description: '自定义后台 LAN IP（例如 192.168.5.1 或 10.0.0.1）'
         required: false
         default: '10.0.0.1'
-
       hostname:
         description: '自定义主机名（留空 = 不修改，使用源码默认值）'
         required: false
         default: ''
-
       config_url:
         description: '自定义 .config 文件下载地址（优先级最高）'
         required: false
         default: ''
-
       diy_url:
         description: '远程 diy 脚本地址（.sh 文件，会在 feeds 更新后、passwall 替换前执行）'
         required: false
         default: ''
-
-      enable_web_debug:
-        description: '编译前开启 Web 远程调试（浏览器直接访问，无需 SSH）'
+      enable_ssh:
+        description: '是否在编译前开启 SSH 远程调试（推荐手动触发时开启，用于 make menuconfig）'
         required: true
-        default: false
+        default: 'false'
         type: boolean
 
 env:
@@ -47,7 +42,7 @@ env:
   SOURCE: ${{ github.event.inputs.source || 'lede' }}
   CONFIG_URL: ${{ github.event.inputs.config_url || '' }}
   DIY_URL: ${{ github.event.inputs.diy_url || '' }}
-  ENABLE_WEB_DEBUG: ${{ github.event.inputs.enable_web_debug || 'false' }}
+  ENABLE_SSH: ${{ github.event.inputs.enable_ssh || 'false' }}
   BUILD_AUTHOR: ${{ github.repository_owner }}
 
 jobs:
@@ -109,84 +104,110 @@ jobs:
           fi
 
       - name: 确定源码目录真实名称
+        id: detect_dir
         run: |
-          echo "REAL_DIR=source-dir" >> $GITHUB_ENV
-          echo "源码目录: source-dir"
-          ls -la source-dir
+          REAL_DIR="source-dir"
+          echo "REAL_DIR=$REAL_DIR" >> $GITHUB_ENV
+          echo "源码目录: $REAL_DIR"
+          ls -la $REAL_DIR
 
-      - name: 修改 feeds.conf.default
-        working-directory: ./source-dir
+      - name: 修改 feeds.conf.default（仅 lede 使用 coolsnowwolf/luci openwrt-25.12 分支）
+        if: env.SOURCE == 'lede'
+        working-directory: ./${{ env.REAL_DIR }}
         run: |
-          if [ "${{ env.SOURCE }}" = "lede" ]; then
-            sed -i '/^src-git luci/c\src-git luci https://github.com/coolsnowwolf/luci.git;openwrt-25.12' feeds.conf.default || true
-            echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> feeds.conf.default || true
-            echo "src-git small https://github.com/kenzok8/small" >> feeds.conf.default || true
-          fi
+          sed -i '/^src-git luci/c\src-git luci https://github.com/coolsnowwolf/luci.git;openwrt-25.12' feeds.conf.default || true
+          echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> feeds.conf.default || true
+          echo "src-git small https://github.com/kenzok8/small" >> feeds.conf.default || true
+
+      - name: 修改 feeds.conf.default（通用部分：qmodem + mosdns）
+        working-directory: ./${{ env.REAL_DIR }}
+        run: |
           sed -i 's/^#src-git qmodem/src-git qmodem/' feeds.conf.default || true
 
       - name: 更新并安装 feeds
-        working-directory: ./source-dir
+        working-directory: ./${{ env.REAL_DIR }}
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a -f
 
-      - name: 执行 diy 脚本
-        working-directory: ./source-dir
+      - name: 执行 diy 脚本（优先远程 diy_url，其次本地 diy.sh）
+        working-directory: ./${{ env.REAL_DIR }}
         run: |
+          DIY_STATUS="未执行"
           if [ -n "${{ env.DIY_URL }}" ]; then
             echo "执行远程 diy: ${{ env.DIY_URL }}"
-            wget -O diy-temp.sh "${{ env.DIY_URL }}" && chmod +x diy-temp.sh && bash ./diy-temp.sh || echo "远程 diy 执行失败但继续"
+            wget -O diy-temp.sh "${{ env.DIY_URL }}" || { echo "远程 diy 下载失败"; exit 1; }
+            chmod +x diy-temp.sh
+            bash ./diy-temp.sh && DIY_STATUS="远程 diy_url 执行成功" || DIY_STATUS="远程 diy 执行失败但继续"
             rm -f diy-temp.sh
           elif [ -f "../../diy.sh" ]; then
             echo "执行本地 diy.sh"
-            cp ../../diy.sh . && chmod +x diy.sh && bash ./diy.sh || echo "本地 diy 执行失败但继续"
+            cp ../../diy.sh .
+            chmod +x diy.sh
+            bash ./diy.sh && DIY_STATUS="本地 diy.sh 执行成功" || DIY_STATUS="本地 diy 执行失败但继续"
             rm -f diy.sh
           else
-            echo "无 diy 脚本"
+            DIY_STATUS="无 diy 脚本"
           fi
+          echo "DIY 状态: $DIY_STATUS"
 
-      - name: 加载 .config
-        working-directory: ./source-dir
-        run: |
-          CONFIG_FOUND=false
-          if [ -n "${{ env.CONFIG_URL }}" ]; then
-            wget -O .config "${{ env.CONFIG_URL }}" && CONFIG_FOUND=true
-          fi
-          if [ "$CONFIG_FOUND" = false ] && [ -f "../../config.buildinfo" ]; then
-            cp -fv "../../config.buildinfo" .config && CONFIG_FOUND=true
-          fi
-          if [ "$CONFIG_FOUND" = false ] && [ -f "../../.config" ]; then
-            cp -fv "../../.config" .config && CONFIG_FOUND=true
-          fi
-          if [ "$CONFIG_FOUND" = false ] && [ -f "../../X86/.config" ]; then
-            cp -fv "../../X86/.config" .config && CONFIG_FOUND=true
-          fi
-          if [ "$CONFIG_FOUND" = false ]; then
-            wget -O .config "${{ env.REMOTE_CONFIG_URL }}"
-          fi
-          make defconfig
-
-      # ====================== Web 远程调试（浏览器控制） ======================
-      - name: 🌐 编译前开启 Web 远程调试（浏览器直接访问，无需 SSH）
-        if: env.ENABLE_WEB_DEBUG == 'true'
+      # ==================== 新增：编译前 SSH 交互环节 ====================
+      - name: 开启 SSH 远程链接（用于 make menuconfig 等交互操作）
+        if: env.ENABLE_SSH == 'true'
         uses: mxschmitt/action-tmate@v3
         with:
-          limit-access-to-actor: true
-          connect-timeout-seconds: 3600
-        continue-on-error: true
+          # 可选：限制会话时长（默认 6 小时，够手动操作了）
+          timeout-minutes: 360
+          # 可选：开启 Web 终端（浏览器直接访问，无需 SSH 客户端）
+           limit-access-to-actor: true   # 只允许触发者连接（更安全）
 
-      # ====================== 后续编译流程 ======================
-      - name: mt798x-closed 模式 - 替换 golang
-        if: env.SOURCE == 'mt798x-closed'
-        working-directory: ./source-dir
+      # ==================== 继续原有编译流程 ====================
+      - name: 加载 .config（支持 config.buildinfo）
+        working-directory: ./${{ env.REAL_DIR }}
         run: |
+          CONFIG_FOUND=false
+          CONFIG_SOURCE="未知来源"
+          if [ -n "${{ env.CONFIG_URL }}" ]; then
+            echo "优先使用用户指定的远程 .config: ${{ env.CONFIG_URL }}"
+            wget -O .config "${{ env.CONFIG_URL }}" && CONFIG_FOUND=true && CONFIG_SOURCE="用户指定的 config_url"
+          fi
+          if [ "$CONFIG_FOUND" = false ] && [ -f "../../config.buildinfo" ]; then
+            echo "发现仓库根目录 config.buildinfo，使用它"
+            cp -fv "../../config.buildinfo" .config && CONFIG_FOUND=true && CONFIG_SOURCE="仓库根目录 config.buildinfo"
+          fi
+          if [ "$CONFIG_FOUND" = false ] && [ -f "../../.config" ]; then
+            echo "使用仓库根目录 .config"
+            cp -fv "../../.config" .config && CONFIG_FOUND=true && CONFIG_SOURCE="仓库根目录 .config"
+          fi
+          if [ "$CONFIG_FOUND" = false ] && [ -f "../../X86/.config" ]; then
+            echo "使用 X86/.config（兼容旧习惯）"
+            cp -fv "../../X86/.config" .config && CONFIG_FOUND=true && CONFIG_SOURCE="仓库 X86/.config"
+          fi
+          if [ "$CONFIG_FOUND" = false ]; then
+            echo "使用默认远程 config 兜底: ${{ env.REMOTE_CONFIG_URL }}"
+            wget -O .config "${{ env.REMOTE_CONFIG_URL }}" && CONFIG_FOUND=true && CONFIG_SOURCE="默认远程 REMOTE_CONFIG_URL"
+          fi
+          if [ "$CONFIG_FOUND" = false ] || [ ! -s .config ]; then
+            echo "错误：没有任何有效的 .config 文件"
+            exit 1
+          fi
+          echo "最终 config 来源：$CONFIG_SOURCE"
+          ls -lh .config
+          make defconfig
+
+      - name: mt798x-closed 模式 - 替换 golang 到 1.26 分支
+        if: env.SOURCE == 'mt798x-closed'
+        working-directory: ./${{ env.REAL_DIR }}
+        run: |
+          echo "替换 golang feed 为 kenzok8 1.26 版本"
           rm -rf feeds/packages/lang/golang || true
           git clone --depth=1 -b 1.26 https://github.com/kenzok8/golang.git feeds/packages/lang/golang || exit 1
           ./scripts/feeds update -a
           ./scripts/feeds install -a -f
+          grep -E "PKG_VERSION|GO_VERSION" feeds/packages/lang/golang/golang/Makefile || echo "未找到 golang 版本信息"
 
       - name: 应用自定义修改（LAN IP + 主机名 + 强制 Argon 主题）
-        working-directory: ./source-dir
+        working-directory: ./${{ env.REAL_DIR }}
         run: |
           echo "设置 LAN IP 为 ${{ env.LAN_IP }}"
           sed -i "s/192.168.1.1/${{ env.LAN_IP }}/g" package/base-files/files/bin/config_generate
@@ -194,25 +215,39 @@ jobs:
           PREFIX_2=$(echo "${{ env.LAN_IP }}" | cut -d. -f1-2).
           sed -i "s/192.168.1./${PREFIX_3}/g" package/base-files/files/bin/config_generate
           sed -i "s/192.168./${PREFIX_2}/g" package/base-files/files/bin/config_generate
-
           HOSTNAME_TRIMMED=$(echo "${{ env.HOSTNAME }}" | xargs)
           if [ -n "$HOSTNAME_TRIMMED" ]; then
             echo "设置主机名 为 $HOSTNAME_TRIMMED"
             sed -i -E "s/(set system\.@system\[-1\]\.hostname=')[^']+'/\1$HOSTNAME_TRIMMED'/" package/base-files/files/bin/config_generate
+            sed -i -E "s/^hostname=.*$/hostname='$HOSTNAME_TRIMMED'/" package/base-files/files/bin/config_generate || true
             echo "HOSTNAME_USED=$HOSTNAME_TRIMMED" >> $GITHUB_ENV
           else
+            echo "主机名输入为空 → 不修改，使用源码默认主机名"
             echo "HOSTNAME_USED=源码默认" >> $GITHUB_ENV
           fi
-
           echo "强制使用 Argon 主题"
-          find feeds/luci/collections/ -type f -name Makefile -exec sed -i -E 's/(luci-theme-)[a-zA-Z0-9_-]+/\1argon/g' {} \;
+          find feeds/luci/collections/ -type f -name Makefile -exec \
+            sed -i -E 's/(luci-theme-)[a-zA-Z0-9_-]+/\1argon/g' {} \;
 
-      - name: 缓存、下载依赖并编译固件
-        working-directory: ./source-dir
+      - name: 缓存下载文件和工具链
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.REAL_DIR }}/dl
+            ${{ env.REAL_DIR }}/staging_dir
+          key: ${{ runner.os }}-build-${{ env.SOURCE }}-${{ hashFiles(format('{0}/.config', env.REAL_DIR)) }}
+          restore-keys: ${{ runner.os }}-build-${{ env.SOURCE }}-
+
+      - name: 下载依赖包
+        working-directory: ./${{ env.REAL_DIR }}
+        run: |
+          make download -j$(nproc) || make download -j1 V=s
+
+      - name: 编译固件
+        working-directory: ./${{ env.REAL_DIR }}
         env:
           FORCE_UNSAFE_CONFIGURE: 1
         run: |
-          make download -j$(nproc) || make download -j1 V=s
           make -j$(nproc) V=s || make -j1 V=s
 
       - name: 收集已选 luci-app 信息
