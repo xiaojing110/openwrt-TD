@@ -151,15 +151,13 @@ jobs:
           fi
           echo "DIY 状态: $DIY_STATUS"
 
-      # ==================== 新增：编译前 SSH 交互环节 ====================
+      # ==================== 新增：编译前 SSH 交互环节（不是固件 SSH，是 Runner 环境） ====================
       - name: 开启 SSH 远程链接（用于 make menuconfig 等交互操作）
         if: env.ENABLE_SSH == 'true'
         uses: mxschmitt/action-tmate@v3
         with:
-          # 可选：限制会话时长（默认 6 小时，够手动操作了）
-          timeout-minutes: 360
-          # 可选：开启 Web 终端（浏览器直接访问，无需 SSH 客户端）
-           limit-access-to-actor: true   # 只允许触发者连接（更安全）
+          timeout-minutes: 360   # 会话最长 6 小时，够手动操作
+          # limit-access-to-actor: true   # 可取消注释，只允许触发者连接（更安全）
 
       # ==================== 继续原有编译流程 ====================
       - name: 加载 .config（支持 config.buildinfo）
@@ -215,11 +213,14 @@ jobs:
           PREFIX_2=$(echo "${{ env.LAN_IP }}" | cut -d. -f1-2).
           sed -i "s/192.168.1./${PREFIX_3}/g" package/base-files/files/bin/config_generate
           sed -i "s/192.168./${PREFIX_2}/g" package/base-files/files/bin/config_generate
+          # 主机名：只有非空且 trim 后非空才修改
           HOSTNAME_TRIMMED=$(echo "${{ env.HOSTNAME }}" | xargs)
           if [ -n "$HOSTNAME_TRIMMED" ]; then
             echo "设置主机名 为 $HOSTNAME_TRIMMED"
             sed -i -E "s/(set system\.@system\[-1\]\.hostname=')[^']+'/\1$HOSTNAME_TRIMMED'/" package/base-files/files/bin/config_generate
             sed -i -E "s/^hostname=.*$/hostname='$HOSTNAME_TRIMMED'/" package/base-files/files/bin/config_generate || true
+            echo "当前 hostname 设置："
+            grep -E "hostname=" package/base-files/files/bin/config_generate || echo "未找到 hostname 行"
             echo "HOSTNAME_USED=$HOSTNAME_TRIMMED" >> $GITHUB_ENV
           else
             echo "主机名输入为空 → 不修改，使用源码默认主机名"
@@ -250,58 +251,118 @@ jobs:
         run: |
           make -j$(nproc) V=s || make -j1 V=s
 
-      - name: 收集已选 luci-app 信息
-        working-directory: ./source-dir
+      - name: 收集已选 luci-app 信息（从固件 manifest 读取，最准确反映固件实际包含）
+        working-directory: ./${{ env.REAL_DIR }}
         run: |
+          echo "尝试生成固件包清单 (make manifest)..."
           APPS=""
+       
           make manifest 2>/dev/null | grep -o 'luci-app-[^[:space:]]*' | sort | uniq > /tmp/luci-apps.txt || true
+       
           if [ -s /tmp/luci-apps.txt ]; then
-            while read -r pkg; do APPS="$APPS- ${pkg} (已编译进固件)\n"; done < /tmp/luci-apps.txt
+            echo "✅ 从 manifest 成功提取 luci-app（固件内真实包含）"
+            while read -r pkg; do
+              APPS="$APPS- ${pkg} (已编译进固件)\n"
+            done < /tmp/luci-apps.txt
           else
+            echo "manifest 生成失败，回退到 .config 读取"
             grep '^CONFIG_PACKAGE_luci-app' .config 2>/dev/null | grep '=y' | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort | uniq > /tmp/luci-apps.txt || true
-            while read -r pkg; do APPS="$APPS- ${pkg} (已启用)\n"; done < /tmp/luci-apps.txt
+            while read -r pkg; do
+              APPS="$APPS- ${pkg} (已启用)\n"
+            done < /tmp/luci-apps.txt
           fi
-          [ -z "$APPS" ] && APPS="未检测到任何 luci-app 插件"
+       
+          if [ -z "$APPS" ]; then
+            APPS="未检测到任何 luci-app 插件"
+          fi
+       
           echo "LUCI_APPS<<EOF" >> $GITHUB_ENV
           echo -e "$APPS" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
 
-      - name: 提取目标信息
-        working-directory: ./source-dir
+      - name: 提取目标信息（用于 Release 标题和说明）
+        id: extract_target
+        working-directory: ./${{ env.REAL_DIR }}
         run: |
           TARGET_BOARD=$(grep '^CONFIG_TARGET_' .config | grep '=y' | head -1 | sed -n 's/CONFIG_TARGET_\([^=]*\)=y/\1/p' || echo "unknown")
           TARGET_SUB=$(grep '^CONFIG_TARGET_.*_.*=y' .config | grep -v '^CONFIG_TARGET_BOARD' | head -1 | cut -d_ -f4- | cut -d= -f1 || echo "")
-          TARGET_FULL="${TARGET_BOARD}${TARGET_SUB:+-$TARGET_SUB}"
+          if [ -n "$TARGET_SUB" ]; then
+            TARGET_FULL="${TARGET_BOARD}-${TARGET_SUB}"
+          else
+            TARGET_FULL="$TARGET_BOARD"
+          fi
           TARGET_PROFILE=$(make info 2>/dev/null | grep '^Target Profile' | cut -d: -f2- | xargs || echo "$TARGET_FULL")
+          [ -z "$TARGET_PROFILE" ] && TARGET_PROFILE="$TARGET_FULL"
           echo "TARGET_PROFILE=$TARGET_PROFILE" >> $GITHUB_ENV
           echo "TARGET_FULL=$TARGET_FULL" >> $GITHUB_ENV
 
       - name: 生成固件说明文件
-        working-directory: ./source-dir
+        working-directory: ./${{ env.REAL_DIR }}
         run: |
           TARGET_DIR=$(find bin/targets -mindepth 2 -maxdepth 3 -type d 2>/dev/null | head -n1)
           [ -z "$TARGET_DIR" ] && mkdir -p "bin/targets/x86/64" && TARGET_DIR="bin/targets/x86/64"
+     
           cat > "$TARGET_DIR/固件说明.txt" << EOF
           ==================== 固件信息 ====================
-          固件来源     : ${{ env.SOURCE }}
-          目标设备     : ${{ env.TARGET_PROFILE }}
-          编译时间     : $(date '+%Y-%m-%d %H:%M:%S %Z')
-          后台地址     : http://${{ env.LAN_IP }}
-          主机名       : ${{ env.HOSTNAME_USED }}
+          固件来源 : ${{ env.SOURCE }}
+          目标设备 : ${{ env.TARGET_PROFILE }} (${{ env.TARGET_FULL }})
+          编译时间 : $(date '+%Y-%m-%d %H:%M:%S %Z') (Asia/Shanghai)
+          后台地址 : http://${{ env.LAN_IP }}
+          主机名 : ${{ env.HOSTNAME_USED }}
+          用户名/密码 : root / password
+          作者/维护者 : ${{ env.BUILD_AUTHOR }}
+          config 来源 : ${{ env.CONFIG_URL || 'config.buildinfo / .config / 远程默认' }}
+          diy 来源 : ${{ env.DIY_URL || '本地 diy.sh（若存在）' || '无' }}
           ================================================
           EOF
 
-      - name: 打包软件包并发布 Release
+      - name: 打包软件包（排除固件镜像）
+        working-directory: ./${{ env.REAL_DIR }}
+        run: |
+          ZIP_NAME="packages-${{ env.SOURCE }}-${{ github.run_number }}.zip"
+          cd bin
+          zip -r -9 "../${ZIP_NAME}" . \
+            -x "targets/*/*.img*" -x "targets/*/*.bin" -x "targets/*/*.squashfs*" \
+            -x "targets/*/*.vdi" -x "targets/*/*.vmdk" -x "targets/*/*.ova" \
+            -x "targets/*/*.gz" -x "targets/*/*.xz" -x "targets/*/*.tar.gz" \
+            -x "targets/*/profiles.json" -x "targets/*/sha256sums" || true
+          cd ..
+          ls -lh "${ZIP_NAME}" || true
+
+      - name: 发布到 GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ env.SOURCE }}-${{ env.TARGET_PROFILE || 'unknown' }}-${{ github.run_number }}
-          name: ${{ env.SOURCE }} • ${{ env.TARGET_PROFILE }} • LAN ${{ env.LAN_IP }} • #${{ github.run_number }}
+          name: ${{ env.SOURCE }} • ${{ env.TARGET_PROFILE || '通用' }} • ${{ env.HOSTNAME_USED }} • LAN ${{ env.LAN_IP }} • #${{ github.run_number }}
           body: |
-            Web 远程调试已 ${{ env.ENABLE_WEB_DEBUG == 'true' && '开启' || '关闭' }}
+            ### 固件构建信息
+            - **固件来源**： ${{ env.SOURCE }}
+            - **目标设备**： ${{ env.TARGET_PROFILE }} (${{ env.TARGET_FULL }})
+            - **主机名**： ${{ env.HOSTNAME_USED }}
+            - **LAN IP**： ${{ env.LAN_IP }}
+            - **编译时间**： $(date '+%Y-%m-%d %H:%M:%S %Z') (Asia/Shanghai)
+            - **作者**： ${{ env.BUILD_AUTHOR }}
+            - **配置来源**： ${{ env.CONFIG_URL || 'config.buildinfo / 本地 / 远程默认' }}
+            - **diy 脚本**： ${{ env.DIY_URL || '本地 diy.sh（若存在）' || '无' }}
+       
+            ### 已包含主要插件（来自固件 manifest）
             ${{ env.LUCI_APPS }}
+       
+            **上传内容**：
+            • 固件镜像（img / bin / squashfs / vdi / vmdk / ova 等）
+            • 固件说明.txt
+            • packages-*.zip （仅 ipk/apk 软件包）
+       
+            **注意**：主机名留空时使用源码默认值；插件列表来自 `make manifest` + `.config` 双保险。
           files: |
-            ./source-dir/bin/targets/**/*.img
-            ./source-dir/bin/targets/**/*.bin
-            ./source-dir/bin/targets/**/*.squashfs*
-            ./source-dir/bin/targets/**/固件说明.txt
-            ./source-dir/packages-*.zip
+            ${{ env.REAL_DIR }}/bin/targets/**/*.img
+            ${{ env.REAL_DIR }}/bin/targets/**/*.img.gz
+            ${{ env.REAL_DIR }}/bin/targets/**/*.bin
+            ${{ env.REAL_DIR }}/bin/targets/**/*.squashfs*
+            ${{ env.REAL_DIR }}/bin/targets/**/*.vdi
+            ${{ env.REAL_DIR }}/bin/targets/**/*.vmdk
+            ${{ env.REAL_DIR }}/bin/targets/**/*.ova
+            ${{ env.REAL_DIR }}/bin/targets/**/固件说明.txt
+            ${{ env.REAL_DIR }}/packages-*.zip
+          draft: false
+          prerelease: false
