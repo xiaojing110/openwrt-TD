@@ -1,5 +1,4 @@
 name: 构建 LEDE / ImmortalWrt 固件
-
 on:
   workflow_dispatch:
     inputs:
@@ -28,12 +27,6 @@ on:
         description: '远程 diy 脚本地址（.sh 文件，会在 feeds 更新后、passwall 替换前执行）'
         required: false
         default: ''
-      enable_ssh:
-        description: '是否在编译前开启 SSH 远程调试（推荐手动触发时开启，用于 make menuconfig）'
-        required: true
-        default: 'false'
-        type: boolean
-
 env:
   TZ: Asia/Shanghai
   REMOTE_CONFIG_URL: "https://raw.githubusercontent.com/xiaojing110/openwrt-TD/main/X86/.config"
@@ -42,9 +35,7 @@ env:
   SOURCE: ${{ github.event.inputs.source || 'lede' }}
   CONFIG_URL: ${{ github.event.inputs.config_url || '' }}
   DIY_URL: ${{ github.event.inputs.diy_url || '' }}
-  ENABLE_SSH: ${{ github.event.inputs.enable_ssh || 'false' }}
   BUILD_AUTHOR: ${{ github.repository_owner }}
-
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -56,16 +47,13 @@ jobs:
         with:
           ref: main
           fetch-depth: 1
-
       - name: 显示调试信息
         run: |
           echo "当前分支: $(git branch --show-current || echo '未知')"
           ls -la
           find . -maxdepth 3 -type f \( -name ".config" -o -name "config.buildinfo" -o -name "diy.sh" \) || true
-
       - name: 设置时区
         run: sudo timedatectl set-timezone "${TZ}"
-
       - name: 安装编译依赖
         run: |
           sudo apt update -y && sudo apt full-upgrade -y
@@ -80,7 +68,6 @@ jobs:
             qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs \
             upx-ucl unzip vim wget xmlto xxd zlib1g-dev zip
           sudo apt clean
-
       - name: 最大化构建空间
         uses: easimon/maximize-build-space@master
         with:
@@ -91,7 +78,6 @@ jobs:
           remove-haskell: 'true'
           remove-codeql: 'true'
           remove-docker-images: 'true'
-
       - name: 克隆源码
         run: |
           if [ "${{ env.SOURCE }}" = "immortalwrt" ]; then
@@ -102,7 +88,6 @@ jobs:
           else
             git clone --depth=1 https://github.com/coolsnowwolf/lede.git source-dir
           fi
-
       - name: 确定源码目录真实名称
         id: detect_dir
         run: |
@@ -110,7 +95,6 @@ jobs:
           echo "REAL_DIR=$REAL_DIR" >> $GITHUB_ENV
           echo "源码目录: $REAL_DIR"
           ls -la $REAL_DIR
-
       - name: 修改 feeds.conf.default（仅 lede 使用 coolsnowwolf/luci openwrt-25.12 分支）
         if: env.SOURCE == 'lede'
         working-directory: ./${{ env.REAL_DIR }}
@@ -118,18 +102,16 @@ jobs:
           sed -i '/^src-git luci/c\src-git luci https://github.com/coolsnowwolf/luci.git;openwrt-25.12' feeds.conf.default || true
           echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> feeds.conf.default || true
           echo "src-git small https://github.com/kenzok8/small" >> feeds.conf.default || true
-
       - name: 修改 feeds.conf.default（通用部分：qmodem + mosdns）
         working-directory: ./${{ env.REAL_DIR }}
         run: |
           sed -i 's/^#src-git qmodem/src-git qmodem/' feeds.conf.default || true
-
+          #echo "src-git mosdns https://github.com/xiaojing110/luci-app-mosdns.git" >> feeds.conf.default || true
       - name: 更新并安装 feeds
         working-directory: ./${{ env.REAL_DIR }}
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a -f
-
       - name: 执行 diy 脚本（优先远程 diy_url，其次本地 diy.sh）
         working-directory: ./${{ env.REAL_DIR }}
         run: |
@@ -150,16 +132,6 @@ jobs:
             DIY_STATUS="无 diy 脚本"
           fi
           echo "DIY 状态: $DIY_STATUS"
-
-      # ==================== 新增：编译前 SSH 交互环节（不是固件 SSH，是 Runner 环境） ====================
-      - name: 开启 SSH 远程链接（用于 make menuconfig 等交互操作）
-        if: env.ENABLE_SSH == 'true'
-        uses: mxschmitt/action-tmate@v3
-        with:
-          timeout-minutes: 360   # 会话最长 6 小时，够手动操作
-          # limit-access-to-actor: true   # 可取消注释，只允许触发者连接（更安全）
-
-      # ==================== 继续原有编译流程 ====================
       - name: 加载 .config（支持 config.buildinfo）
         working-directory: ./${{ env.REAL_DIR }}
         run: |
@@ -192,7 +164,6 @@ jobs:
           echo "最终 config 来源：$CONFIG_SOURCE"
           ls -lh .config
           make defconfig
-
       - name: mt798x-closed 模式 - 替换 golang 到 1.26 分支
         if: env.SOURCE == 'mt798x-closed'
         working-directory: ./${{ env.REAL_DIR }}
@@ -203,7 +174,6 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a -f
           grep -E "PKG_VERSION|GO_VERSION" feeds/packages/lang/golang/golang/Makefile || echo "未找到 golang 版本信息"
-
       - name: 应用自定义修改（LAN IP + 主机名 + 强制 Argon 主题）
         working-directory: ./${{ env.REAL_DIR }}
         run: |
@@ -229,7 +199,6 @@ jobs:
           echo "强制使用 Argon 主题"
           find feeds/luci/collections/ -type f -name Makefile -exec \
             sed -i -E 's/(luci-theme-)[a-zA-Z0-9_-]+/\1argon/g' {} \;
-
       - name: 缓存下载文件和工具链
         uses: actions/cache@v4
         with:
@@ -238,19 +207,16 @@ jobs:
             ${{ env.REAL_DIR }}/staging_dir
           key: ${{ runner.os }}-build-${{ env.SOURCE }}-${{ hashFiles(format('{0}/.config', env.REAL_DIR)) }}
           restore-keys: ${{ runner.os }}-build-${{ env.SOURCE }}-
-
       - name: 下载依赖包
         working-directory: ./${{ env.REAL_DIR }}
         run: |
           make download -j$(nproc) || make download -j1 V=s
-
       - name: 编译固件
         working-directory: ./${{ env.REAL_DIR }}
         env:
           FORCE_UNSAFE_CONFIGURE: 1
         run: |
           make -j$(nproc) V=s || make -j1 V=s
-
       - name: 收集已选 luci-app 信息（从固件 manifest 读取，最准确反映固件实际包含）
         working-directory: ./${{ env.REAL_DIR }}
         run: |
@@ -279,7 +245,6 @@ jobs:
           echo "LUCI_APPS<<EOF" >> $GITHUB_ENV
           echo -e "$APPS" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
-
       - name: 提取目标信息（用于 Release 标题和说明）
         id: extract_target
         working-directory: ./${{ env.REAL_DIR }}
@@ -295,7 +260,6 @@ jobs:
           [ -z "$TARGET_PROFILE" ] && TARGET_PROFILE="$TARGET_FULL"
           echo "TARGET_PROFILE=$TARGET_PROFILE" >> $GITHUB_ENV
           echo "TARGET_FULL=$TARGET_FULL" >> $GITHUB_ENV
-
       - name: 生成固件说明文件
         working-directory: ./${{ env.REAL_DIR }}
         run: |
@@ -315,7 +279,6 @@ jobs:
           diy 来源 : ${{ env.DIY_URL || '本地 diy.sh（若存在）' || '无' }}
           ================================================
           EOF
-
       - name: 打包软件包（排除固件镜像）
         working-directory: ./${{ env.REAL_DIR }}
         run: |
@@ -328,7 +291,6 @@ jobs:
             -x "targets/*/profiles.json" -x "targets/*/sha256sums" || true
           cd ..
           ls -lh "${ZIP_NAME}" || true
-
       - name: 发布到 GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
